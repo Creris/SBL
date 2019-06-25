@@ -5,8 +5,74 @@ This file contains definitions of behaviour of instructions defined by given mne
 
 ## Table of contents
 
-* TOC
-{:toc}
+- [Interpreter Instructions Definition](#interpreter-instructions-definition)
+  - [Table of contents](#table-of-contents)
+  - [Generic information](#generic-information)
+  - [Instructions with no operands](#instructions-with-no-operands)
+    - [Nop](#nop)
+    - [Halt, End](#halt-end)
+    - [Ret](#ret)
+    - [Loop](#loop)
+    - [Endloop](#endloop)
+    - [IRet](#iret)
+    - [Push_All](#pushall)
+    - [Pop_All](#popall)
+    - [Clear_All](#clearall)
+    - [DisableAllInts](#disableallints)
+    - [RestoreInts](#restoreints)
+    - [EnableAllInts](#enableallints)
+    - [ClrCb](#clrcb)
+  - [Instructions with one parameter](#instructions-with-one-parameter)
+    - [Push](#push)
+    - [Pop](#pop)
+    - [Inc](#inc)
+    - [Dec](#dec)
+    - [Call, RCall](#call-rcall)
+    - [NtvCall](#ntvcall)
+    - [Read](#read)
+    - [Readstr](#readstr)
+    - [Print, PrintS](#print-prints)
+    - [Printstr](#printstr)
+    - [Jmp, RJmp](#jmp-rjmp)
+    - [Jx, RJx](#jx-rjx)
+    - [Not](#not)
+    - [Time](#time)
+    - [Time64](#time64)
+    - [ICount](#icount)
+    - [ICount64](#icount64)
+    - [Dealloc](#dealloc)
+    - [Raise](#raise)
+    - [DisableInt](#disableint)
+    - [EnableInt](#enableint)
+    - [ICountInt, RICountInt](#icountint-ricountint)
+    - [ICountInt64, RICountInt64](#icountint64-ricountint64)
+  - [Instructions with two parameters](#instructions-with-two-parameters)
+    - [Mov](#mov)
+    - [Movx](#movx)
+    - [Laddr](#laddr)
+    - [Add](#add)
+    - [Sub](#sub)
+    - [Mul](#mul)
+    - [Div](#div)
+    - [Mod](#mod)
+    - [Test](#test)
+    - [Lsh](#lsh)
+    - [Rlsh](#rlsh)
+    - [Rsh](#rsh)
+    - [Rrsh](#rrsh)
+    - [And](#and)
+    - [Or](#or)
+    - [Xor](#xor)
+    - [Eq](#eq)
+    - [Neq](#neq)
+    - [Lt](#lt)
+    - [Bt](#bt)
+    - [Loadload](#loadload)
+    - [Alloc](#alloc)
+    - [VCall](#vcall)
+    - [RegInt, RRegInt](#regint-rregint)
+    - [GetNtvId](#getntvid)
+    - [Xchg](#xchg)
 
 ## Generic information
 
@@ -98,7 +164,7 @@ Alternative names: Return from instruction handler.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 476     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1DC   |
 
 Returns the control flow from an interrupt handler to the next instruction to be executed(that was interrupted).
 
@@ -111,7 +177,7 @@ Alternative names: Push all registers to stack.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 479     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1DF   |
 
 Pushes all registers to the stack starting with the lowest indexed one.
 
@@ -122,7 +188,7 @@ Alternative names: Pop all registers from stack.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 480     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1E0   |
 
 Pops all registers from the stack, starting with the highest indexed register.
 
@@ -135,7 +201,7 @@ Alternative names: Clear all data registers
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 481     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1E1   |
 
 Set all data registers(indexes 0 - 59) to 0.
 
@@ -146,7 +212,7 @@ Alternative names: Disable all interrupts.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 497     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1F1   |
 
 Disables all interrupts, storing the status of all interrupts in a backup array.
 
@@ -157,7 +223,7 @@ Alternative names: Restore interrupts from backup.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 498     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1F2   |
 
 Restores all statuses of interrupts from the backup array.
 
@@ -168,7 +234,7 @@ Alternative names: Enable all interrupts.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 499     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1F3   |
 
 Enables all interrupts so that every interrupt is active and ready to be handled.
 
@@ -179,7 +245,7 @@ Alternative names: Clear control byte.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 500     |
-|   Hex    | 0x05    |
+|   Hex    | 0x1F4   |
 
 Sets the control byte that is used in conditional moves and jumps, and is set by Test to 0.
 
@@ -214,9 +280,9 @@ If any of these are missing, it is skipped and the next encoding will be the nex
 Alternative names: Push to stack
 
 | Encoding | |
-| -------- | :-----:      |
-| Decimal  | 6            |
-|   Hex    | 0x06         |
+| -------- | :-----: |
+| Decimal  | 6       |
+|   Hex    | 0x06    |
 
 Available parameter types:
 
@@ -234,9 +300,9 @@ If the stack pointer is 0, this instruction will raise a `StackUnderflow` error 
 Alternative names: Pop from stack
 
 | Encoding | |
-| -------- | :-----:      |
-| Decimal  | 10           |
-|   Hex    | 0x0a         |
+| -------- | :-----: |
+| Decimal  | 10      |
+|   Hex    | 0x0A    |
 
 Available parameter types:
 
@@ -251,9 +317,9 @@ Takes the value stored in the program memory at where stack pointer points to in
 Alternative names: Increment
 
 | Encoding | |
-| -------- | :-----:      |
-| Decimal  | 13           |
-|   Hex    | 0x0d         |
+| -------- | :-----: |
+| Decimal  | 13      |
+|   Hex    | 0x0D    |
 
 Available parameter types:
 
@@ -268,9 +334,9 @@ Increments the value stored in the destination by one.
 Alternative names: Decrement
 
 | Encoding | |
-| -------- | :-----:      |
-| Decimal  | 16           |
-|   Hex    | 0x10         |
+| -------- | :-----: |
+| Decimal  | 16      |
+|   Hex    | 0x10    |
 
 Available parameter types:
 
@@ -306,7 +372,7 @@ Alternative name: Call a native function.
 | Encoding | |
 | -------- | :-----:  |
 | Decimal  | 472      |
-|   Hex    | 0xXX     |
+|   Hex    | 0x1D8    |
 
 Available parameter types:
 
@@ -324,7 +390,7 @@ Alternative name: Read an integer from standard input.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 25      |
-|   Hex    | 0xXX    |
+|   Hex    | 0x19    |
 
 Available parameter types:
 
@@ -341,7 +407,7 @@ Alternative name: Read a string from standard input.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 28      |
-|   Hex    | 0xXX    |
+|   Hex    | 0x1C    |
 
 Available parameter types:
 
@@ -357,7 +423,7 @@ Alternative names: Print an integer to standard output, Print a signed integer i
 | Encoding | Print   | PrintS |
 | -------- | :-----: | :---:  |
 | Decimal  | 30      | 34     |
-|   Hex    | 0xXX    | 0xXX   |
+|   Hex    | 0x1E    | 0x22   |
 
 Available parameter types:
 
@@ -375,7 +441,7 @@ Alternative name: Print a string into the standard output.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 38      |
-|   Hex    | 0xXX    |
+|   Hex    | 0x26    |
 
 Available parameter types:
 
@@ -391,7 +457,7 @@ Alternative name: Unconditional jump, Unconditional relative jump
 | Encoding | Jmp     | RJmp    |
 | -------- | :-----: | :----:  |
 | Decimal  | 40      | 79      |
-|   Hex    | 0xXX    | 0xXX    |
+|   Hex    | 0x28    | 0x4F    |
 
 Available parameter types:
 
@@ -410,7 +476,7 @@ Alternate names: Conditional jumps on control flag X, Conditional relative jumps
 | Encoding | Jb    |  Jnb   |  Jbe   |  Jnbe  |  Jl    |  Jnl   |  Jle   |  Jnle  |  Jz    |  Jnz   |  Je    |  Jne   |
 | -------- | :---: | :---:  | :---:  | :---:  | :---:  | :---:  | :---:  | :---:  | :---:  | :---:  | :---:  | :---:  |
 | Decimal  | 43    | 46     | 49     | 52     | 55     | 58     | 61     | 64     |  67    | 70     | 73     | 76     |
-|   Hex    | 0x00  | 0x00   | 0x00   | 0x00   | 0x00   | 0x00   | 0x00   | 0x00   | 0x00   | 0x00   | 0x00   | 0x00   |
+|   Hex    | 0x2B  | 0x2E   | 0x31   | 0x34   | 0x37   | 0x3A   | 0x3D   | 0x40   | 0x43   | 0x46   | 0x49   | 0x4C   |
 
 Relative jumps have encoding equal to the encoding of their non-relative counterpart + 39.
 
@@ -434,7 +500,7 @@ Alternative name: Bit-invert a value
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 118     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x76    |
 
 Available parameter types:
 
@@ -449,7 +515,7 @@ Alternative name: Get current time.
 | Encoding | Register parameter | Address and Indirect |
 | -------- | :-----:            | :--------:           |
 | Decimal  | 119                | 462, 463             |
-|   Hex    | 0xXX               | 0xXX, 0xXX           |
+|   Hex    | 0x77               | 0x1CE, 0x1CF         |
 
 Available parameter types:
 
@@ -467,10 +533,10 @@ Even tho the clock overflows, it can be used as a delta for measurement of time 
 
 Alternative name: Get current time in 64 bits.
 
-| Encoding | Register parameter | Address and Indirect |
-| -------- | :-----:            | :--------:           |
-| Decimal  | 119                | 462, 463             |
-|   Hex    | 0xXX               | 0xXX, 0xXX           |
+| Encoding | |
+| -------- | :-----: |
+| Decimal  | 464     |
+|   Hex    | 0x1D0   |
 
 Available parameter types:
 
@@ -489,7 +555,7 @@ Alternative name: Get instruction counter.
 | Encoding | Register parameter | Address, Indirect |
 | -------- | :-----:            | :--------:        |
 | Decimal  | 120                | 467, 468          |
-|   Hex    | 0xXX               | 0xXX, 0xXX        |
+|   Hex    | 0x78               | 0x1D3, 0x1D4      |
 
 Available parameter types:
 
@@ -506,7 +572,7 @@ Alternative name: Get 64 bit instruction counter.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 469     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x1D5   |
 
 Available parameter types:
 
@@ -523,7 +589,7 @@ Alternative name: Deallocate dynamic memory
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 121     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x79    |
 
 Available parameter types:
 
@@ -540,7 +606,7 @@ Alternative name: Raise an interrupt.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 124     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x7C    |
 
 Available parameter types:
 
@@ -560,7 +626,7 @@ Alternative name: Disable an interrupt.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 128     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x80    |
 
 Available parameter types:
 
@@ -576,7 +642,7 @@ Alternative name: Enable an interrupt.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 130     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x82    |
 
 Available parameter types:
 
@@ -592,7 +658,7 @@ Alternative name: Raise an interrupt on instruction count.
 | Encoding | ICountInt | RICountInt |
 | -------- | :-----:   | :----: |
 | Decimal  | 132       | 477    |
-|   Hex    | 0xXX      | 0xXX   |
+|   Hex    | 0x84      | 0x1DD  |
 
 Available parameter types:
 
@@ -612,7 +678,7 @@ Alternative name: Raise an interrupt on instruction count.
 | Encoding | ICountInt | RICountInt |
 | -------- | :-----:   | :----: |
 | Decimal  | 501       | 504    |
-|   Hex    | 0xXX      | 0xXX   |
+|   Hex    | 0x1F5     | 0x1F8  |
 
 Available parameter types:
 
@@ -638,7 +704,7 @@ Alternative name: Move from source to destination.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 134     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x86    |
 
 Available parameter types:
 
@@ -658,7 +724,7 @@ Alternative name: Conditionally move from source to destination.
 | Encoding | Move    | Movne   | Movz    | Movnz   |
 | -------- | :-----: | :-----: | :-----: | :-----: |
 | Decimal  | 146     | 158     | 170     | 182     |
-|   Hex    | 0xXX    | 0xXX    | 0xXX    | 0xXX    |
+|   Hex    | 0x92    | 0x9E    | 0xAA    | 0xB6    |
 
 Available parameter types:
 
@@ -685,7 +751,7 @@ Alternative name: Load effective address.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 194     |
-|   Hex    | 0xXX    |
+|   Hex    | 0xC2    |
 
 Available parameter types:
 
@@ -705,7 +771,7 @@ Alternative name: Add source to destination.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 200     |
-|   Hex    | 0xXX    |
+|   Hex    | 0xC8    |
 
 Available parameter types:
 
@@ -725,7 +791,7 @@ Alternative name: Substract source from destination.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 212     |
-|   Hex    | 0xXX    |
+|   Hex    | 0xD4    |
 
 Available parameter types:
 
@@ -745,7 +811,7 @@ Alternative name: Multiply source with destination.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 224     |
-|   Hex    | 0xXX    |
+|   Hex    | 0xE0    |
 
 Available parameter types:
 
@@ -765,7 +831,7 @@ Alternative name: Divide destination by source.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 236     |
-|   Hex    | 0xXX    |
+|   Hex    | 0xEC    |
 
 Available parameter types:
 
@@ -785,7 +851,7 @@ Alternative name: Modulo destination with source.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 248     |
-|   Hex    | 0xXX    |
+|   Hex    | 0xF8    |
 
 Available parameter types:
 
@@ -805,7 +871,7 @@ Alternative name: Test source and destination.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 260     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x104   |
 
 Available parameter types:
 
@@ -834,7 +900,7 @@ Alternative name: Left shift.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 272     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x110   |
 
 Available parameter types:
 
@@ -854,7 +920,7 @@ Alternative name: Rotate left shift.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 284     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x11C   |
 
 Available parameter types:
 
@@ -874,7 +940,7 @@ Alternative name: Right shift.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 296     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x128   |
 
 Available parameter types:
 
@@ -894,7 +960,7 @@ Alternative name: Rotate right shift.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 308     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x134   |
 
 Available parameter types:
 
@@ -914,7 +980,7 @@ Alternative name: Logical and.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 320     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x140   |
 
 Available parameter types:
 
@@ -934,7 +1000,7 @@ Alternative name: Logical or.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 332     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x14C   |
 
 Available parameter types:
 
@@ -954,7 +1020,7 @@ Alternative name: Logical xor.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 344     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x158   |
 
 Available parameter types:
 
@@ -974,7 +1040,7 @@ Alternative name: Set equal control flag.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 356     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x164   |
 
 Available parameter types:
 
@@ -994,7 +1060,7 @@ Alternative name: Set unequal control flag.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 368     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x170   |
 
 Available parameter types:
 
@@ -1014,7 +1080,7 @@ Alternative name: Set unequal and smaller control flags.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 380     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x17C   |
 
 Available parameter types:
 
@@ -1034,7 +1100,7 @@ Alternative name: Set unequal and bigger control flags.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 392     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x188   |
 
 Available parameter types:
 
@@ -1054,7 +1120,7 @@ Alternative name: Load from indirect.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 404     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x194   |
 
 Available parameter types:
 
@@ -1074,7 +1140,7 @@ Alternative name: Load from indirect.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 410     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x19A   |
 
 Available parameter types:
 
@@ -1094,7 +1160,7 @@ Alternative name: Load from indirect.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 422     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x1A6   |
 
 Available parameter types:
 
@@ -1120,7 +1186,7 @@ Alternative name: Load from indirect.
 | Encoding | RegInt  | RRegInt |
 | -------- | :-----: | :-----: |
 | Decimal  | 438     | 450     |
-|   Hex    | 0xXX    | 0xXX    |
+|   Hex    | 0x1B6   | 0x1C2   |
 
 Available parameter types:
 
@@ -1140,7 +1206,7 @@ Alternative name: Load from indirect.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 482     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x1E2   |
 
 Available parameter types:
 
@@ -1162,7 +1228,7 @@ Alternative name: Exchange.
 | Encoding | |
 | -------- | :-----: |
 | Decimal  | 488     |
-|   Hex    | 0xXX    |
+|   Hex    | 0x1E8   |
 
 Available parameter types:
 
