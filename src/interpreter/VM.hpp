@@ -149,8 +149,8 @@ namespace sbl::vm {
 
 	struct State {
 		uint64_t& instrCount;
+		uint64_t& nextInstrCountInterrupt;
 		uint32_t& controlByte;
-		uint32_t& nextInstrCountInterrupt;
 
 		std::array<uint32_t, 64>& registers;
 
@@ -195,8 +195,8 @@ namespace sbl::vm {
 		};
 
 		uint64_t instrCount = 0;
+		uint64_t nextInstrCountInterrupt = 0;
 		uint32_t controlByte = 0;
-		uint32_t nextInstrCountInterrupt = 0;
 		std::array<uint32_t, 64> registers;
 
 		uint32_t* program;
@@ -297,6 +297,14 @@ namespace sbl::vm {
 			*(addr + 1) = (time >> 32) & 0xFFFFFFFF;
 		}
 
+		void _setNextInstrCountInt(uint32_t lower, uint32_t upper) {
+			nextInstrCountInterrupt = (upper << 32) | lower;
+		}
+
+		void _setNextInstrCountInt(uint64_t last, uint32_t lower, uint32_t upper) {
+			nextInstrCountInterrupt = last + ((upper << 32) | lower);
+		}
+
 		void setControl(uint32_t left, uint32_t right) {
 			controlByte = 0;
 			if (left > right)		controlByte |= (TestBigger | TestUnequal | TestBiggerEqual);
@@ -355,7 +363,7 @@ namespace sbl::vm {
 
 		int _runInterruptCode(uint32_t code) {
 			if (!_validateInterruptCode(code))	return 0;
-			else if (!interrupts[code].first)	return 0;
+			else if (!interrupts[code].first)	return 1;
 			auto addr = interrupts[code].second;
 			if (!addr)	return 0;
 
@@ -1817,10 +1825,10 @@ namespace sbl::vm {
 					_doNativeCall(nextInstr->arg1);
 					break;
 				case Mnemonic::RICountInt_R:
-					nextInstrCountInterrupt = static_cast<uint32_t>(instrCount) + registers[nextInstr->arg1];
+					nextInstrCountInterrupt = instrCount + registers[nextInstr->arg1];
 					break;
 				case Mnemonic::RICountInt_V:
-					nextInstrCountInterrupt = static_cast<uint32_t>(instrCount) + nextInstr->arg1;
+					nextInstrCountInterrupt = instrCount + nextInstr->arg1;
 					break;
 				case Mnemonic::Push_All:
 					for (size_t i = 0, j = registers.size(); i < j; ++i) {
@@ -1891,6 +1899,27 @@ namespace sbl::vm {
 					break;
 				case Mnemonic::EnableAllInts:
 					for (auto& x : interrupts)  x.first = true;
+					break;
+				case Mnemonic::ClrCb:
+					controlByte = 0;
+					break;
+				case Mnemonic::ICountInt64_R:
+					_setNextInstrCountInt(registers[nextInstr->arg1], *(&registers[nextInstr->arg1] + 1));
+					break;
+				case Mnemonic::ICountInt64_A:
+					_setNextInstrCountInt(program[nextInstr->arg1], *(&program[nextInstr->arg1] + 1));
+					break;
+				case Mnemonic::ICountInt64_I:
+					_setNextInstrCountInt(program[registers[nextInstr->arg1]], *(&program[registers[nextInstr->arg1]] + 1));
+					break;
+				case Mnemonic::RICountInt64_R:
+					_setNextInstrCountInt(nextInstrCountInterrupt, registers[nextInstr->arg1], *(&registers[nextInstr->arg1] + 1));
+					break;
+				case Mnemonic::RICountInt64_A:
+					_setNextInstrCountInt(nextInstrCountInterrupt, program[nextInstr->arg1], *(&program[nextInstr->arg1] + 1));
+					break;
+				case Mnemonic::RICountInt64_I:
+					_setNextInstrCountInt(nextInstrCountInterrupt, program[registers[nextInstr->arg1]], *(&program[registers[nextInstr->arg1]] + 1));
 					break;
 
 				//UNHANDLED = INVALID INSTRUCTION

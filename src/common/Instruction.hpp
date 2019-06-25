@@ -225,6 +225,11 @@ namespace sbl::vm {
 		RestoreInts,
 		EnableAllInts,
 
+		ClrCb,
+
+		ICountInt64_R, ICountInt64_A, ICountInt64_I,
+		RICountInt64_R, RICountInt64_A, RICountInt64_I,
+
 		//This variable is important, it marks the total count of instructions
 		//It will stop working when we introduce 2byte instructions(>=192 on first byte)
 		TotalCount,
