@@ -94,6 +94,8 @@ Example of this is a `Call` and `RCall`. Call will jump to the value provided to
 
 ## Instructions with no operands
 
+------------
+
 ### Nop
 
 Alternative name: NaN
@@ -105,6 +107,8 @@ Alternative name: NaN
 
 This instruction tells the interpreter to do nothing and continue to next instruction.
 
+------------
+
 ### Halt, End
 
 Alternative names: NaN
@@ -115,6 +119,8 @@ Alternative names: NaN
 |   Hex    | 0x01    | 0x02  |
 
 These two instructions will tell the interpreter to stop and finalize all execution.
+
+------------
 
 ### Ret
 
@@ -131,6 +137,8 @@ This is achieved by taking the value stored by the `Call` instruction in stack, 
 
 If the value at the top of the stack from the caller's position has been overwritten, or the stack pointer has not been restored to the same position as at the call to the function, the result of this instruction will be change of control flow to undefined position.
 
+------------
+
 ### Loop
 
 Alternative names: NaN
@@ -143,6 +151,8 @@ Alternative names: NaN
 This instruction stores the current loop pointer at the top of the stack and sets the loop pointer to the address of the next instruction.
 
 This value is then used by the following `Endloop` instruction.
+
+------------
 
 ### Endloop
 
@@ -157,6 +167,8 @@ This instruction reads a value from register r10 and checks if it is 0. If the r
 
 If the value of register r10 is not equal to 0, the register is decremented, and the interpreter assigns the loop pointer to instruction pointer, effectively jumping to the first instruction after the most recent `Loop` instruction.
 
+------------
+
 ### IRet
 
 Alternative names: Return from instruction handler.
@@ -170,6 +182,8 @@ Returns the control flow from an interrupt handler to the next instruction to be
 
 For more information check documentation on `Interrupts`.
 
+------------
+
 ### Push_All
 
 Alternative names: Push all registers to stack.
@@ -180,6 +194,8 @@ Alternative names: Push all registers to stack.
 |   Hex    | 0x1DF   |
 
 Pushes all registers to the stack starting with the lowest indexed one.
+
+------------
 
 ### Pop_All
 
@@ -194,6 +210,8 @@ Pops all registers from the stack, starting with the highest indexed register.
 
 Also overwrites the control registers indexed 60 and higher.
 
+------------
+
 ### Clear_All
 
 Alternative names: Clear all data registers
@@ -204,6 +222,8 @@ Alternative names: Clear all data registers
 |   Hex    | 0x1E1   |
 
 Set all data registers(indexes 0 - 59) to 0.
+
+------------
 
 ### DisableAllInts
 
@@ -216,6 +236,8 @@ Alternative names: Disable all interrupts.
 
 Disables all interrupts, storing the status of all interrupts in a backup array.
 
+------------
+
 ### RestoreInts
 
 Alternative names: Restore interrupts from backup.
@@ -227,6 +249,8 @@ Alternative names: Restore interrupts from backup.
 
 Restores all statuses of interrupts from the backup array.
 
+------------
+
 ### EnableAllInts
 
 Alternative names: Enable all interrupts.
@@ -237,6 +261,8 @@ Alternative names: Enable all interrupts.
 |   Hex    | 0x1F3   |
 
 Enables all interrupts so that every interrupt is active and ready to be handled.
+
+------------
 
 ### ClrCb
 
@@ -275,6 +301,8 @@ Every instruction address follows the following scheme:
 
 If any of these are missing, it is skipped and the next encoding will be the next valid one.
 
+------------
+
 ### Push
 
 Alternative names: Push to stack
@@ -295,6 +323,8 @@ This instruction pushed a value to the address of stack pointer - 1, and then de
 
 If the stack pointer is 0, this instruction will raise a `StackUnderflow` error and stop execution.
 
+------------
+
 ### Pop
 
 Alternative names: Pop from stack
@@ -311,6 +341,8 @@ Available parameter types:
 * Indirect
 
 Takes the value stored in the program memory at where stack pointer points to into the destination and increments the stack pointer.
+
+------------
 
 ### Inc
 
@@ -329,6 +361,8 @@ Available parameter types:
 
 Increments the value stored in the destination by one.
 
+------------
+
 ### Dec
 
 Alternative names: Decrement
@@ -345,6 +379,8 @@ Available parameter types:
 * Indirect
   
 Decrements the value stored in the destination by one.
+
+------------
 
 ### Call, RCall
 
@@ -365,6 +401,8 @@ Stores the address of the instruction immediately following this `Call` instruct
 
 Note that for this instruction, if the parameter is of type address, the value is taken as is, instead of loaded from that memory unit.
 
+------------
+
 ### NtvCall
 
 Alternative name: Call a native function.
@@ -383,6 +421,8 @@ Available parameter types:
 
 Tells the interpreter to attempt to call a native function. For more information please refer to documentation on `Native functions`.
 
+------------
+
 ### Read
 
 Alternative name: Read an integer from standard input.
@@ -400,6 +440,8 @@ Available parameter types:
 
 Instructs the interpreter to read an integer into the destination.
 
+------------
+
 ### Readstr
 
 Alternative name: Read a string from standard input.
@@ -415,6 +457,8 @@ Available parameter types:
 * Indirect
 
 Instructs the interpreter to read a string into the destination.
+
+------------
 
 ### Print, PrintS
 
@@ -434,6 +478,8 @@ Available parameter types:
 
 Instructs the interpreter to print a integer, potentially signed, from the destination into the standard output.
 
+------------
+
 ### Printstr
 
 Alternative name: Print a string into the standard output.
@@ -449,6 +495,8 @@ Available parameter types:
 * Indirect
 
 Instructs the interpreter to print a string from the destination into the standard output.
+
+------------
 
 ### Jmp, RJmp
 
@@ -468,6 +516,8 @@ Available parameter types:
 Changes the instruction pointer to the value stored in the parameter.
 
 Note that this instruction will interpret a parameter of type address as the value itself.
+
+------------
 
 ### Jx, RJx
 
@@ -493,6 +543,8 @@ The control flag that is inspected is as following:
 | Jz, Je      | Equal        |
 | Jnz, Jne    | NotEqual     |
 
+------------
+
 ### Not
 
 Alternative name: Bit-invert a value
@@ -507,6 +559,8 @@ Available parameter types:
 * Register
 
 Inverts every bit in a register.
+
+------------
 
 ### Time
 
@@ -529,6 +583,8 @@ Overflows every 71.58 minutes.
 
 Even tho the clock overflows, it can be used as a delta for measurement of time between two time events(a time delta) with correct timing.
 
+------------
+
 ### Time64
 
 Alternative name: Get current time in 64 bits.
@@ -548,6 +604,8 @@ Writes the lower 32 bits of the time obtained, same as with `Time` instruction, 
 
 Overflows every 584,942.417 years.
 
+------------
+
 ### ICount
 
 Alternative name: Get instruction counter.
@@ -564,6 +622,8 @@ Available parameter types:
 * Indirect
 
 Writes the 32 lowest bits of the counter for instructions executed since the start of execution into destination.
+
+------------
 
 ### ICount64
 
@@ -582,6 +642,8 @@ Available parameter types:
 
 Writes the 32 lowest bits of the counter for instructions executed since the start of execution into destination and writes the higher 32 bits into the immediate next address or register.
 
+------------
+
 ### Dealloc
 
 Alternative name: Deallocate dynamic memory
@@ -598,6 +660,8 @@ Available parameter types:
 * Indirect
 
 Attempts to deallocate a block of memory that was previously allocated by the `Alloc` instruction pointed to by the parameter.
+
+------------
 
 ### Raise
 
@@ -619,6 +683,8 @@ Raises an interrupt of given number.
 
 For more information on interrupts please refer to the documentation on `Interrupts`.
 
+------------
+
 ### DisableInt
 
 Alternative name: Disable an interrupt.
@@ -635,6 +701,8 @@ Available parameter types:
 
 Disables an interrupt so that it can no longer be raised.
 
+------------
+
 ### EnableInt
 
 Alternative name: Enable an interrupt.
@@ -650,6 +718,8 @@ Available parameter types:
 * Value
 
 Enables an interrupt so that it can be raised.
+
+------------
 
 ### ICountInt, RICountInt
 
@@ -670,6 +740,8 @@ Raises an interrupt `InstrCount`(code 251) once executed instruction count is hi
 If the interrupt is not enabled, does nothing.
 
 If there is another interrupt being handled already when this interrupt is to be raised(such as the instruction count coincides to be hit during handling of another interrupt), the interrupt will be postponed until there is no other interrupt being handled.
+
+------------
 
 ### ICountInt64, RICountInt64
 
@@ -697,6 +769,8 @@ The encoding goes up by 1 for every new mnemonic, unless specified otherwise.
 
 The first parameter is considered to be both source and destination, while the second parameter is considered to be purely source parameter.
 
+------------
+
 ### Mov
 
 Alternative name: Move from source to destination.
@@ -716,6 +790,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Moves a value from source to destination.
+
+------------
 
 ### Movx
 
@@ -744,6 +820,8 @@ Flags inspected:
 | Move, Movz   | Equal        |
 | Movne, Movnz | Unequal      |
 
+------------
+
 ### Laddr
 
 Alternative name: Load effective address.
@@ -763,6 +841,8 @@ Available parameter types:
 | Value     | No     | No     |
 
 Load the address of the source into destination. Effectively moves the value of the parameter instead of the value at that address.
+
+------------
 
 ### Add
 
@@ -784,6 +864,8 @@ Available parameter types:
 
 Adds the value from source to destination.
 
+------------
+
 ### Sub
 
 Alternative name: Substract source from destination.
@@ -803,6 +885,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Substracts the value from source to destination.
+
+------------
 
 ### Mul
 
@@ -824,6 +908,8 @@ Available parameter types:
 
 Multiplies the source values and stores the result in destination.
 
+------------
+
 ### Div
 
 Alternative name: Divide destination by source.
@@ -844,6 +930,8 @@ Available parameter types:
 
 Divides the destination by source and stores the result in destination.
 
+------------
+
 ### Mod
 
 Alternative name: Modulo destination with source.
@@ -863,6 +951,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Performs a `destination % source` and stores it in destination.
+
+------------
 
 ### Test
 
@@ -893,6 +983,8 @@ Sets the control flags in the control byte depending on the values of source and
 
 The values of control byte are not cleared between instructions.
 
+------------
+
 ### Lsh
 
 Alternative name: Left shift.
@@ -912,6 +1004,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Shifts destination by source bits to the left.
+
+------------
 
 ### Rlsh
 
@@ -933,6 +1027,8 @@ Available parameter types:
 
 Performs a rotation left shift on `destination` by `source` bits.
 
+------------
+
 ### Rsh
 
 Alternative name: Right shift.
@@ -952,6 +1048,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Performs an arithmetic right shift on `destination` by `source` bits.
+
+------------
 
 ### Rrsh
 
@@ -973,6 +1071,8 @@ Available parameter types:
 
 Performs a rotate right shift on `destination` by `source` bits.
 
+------------
+
 ### And
 
 Alternative name: Logical and.
@@ -992,6 +1092,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Performs a logical bitwise AND on destination and source and stores the result in destination.
+
+------------
 
 ### Or
 
@@ -1013,6 +1115,8 @@ Available parameter types:
 
 Performs a logical bitwise OR on destination and source and stores the result in destination.
 
+------------
+
 ### Xor
 
 Alternative name: Logical xor.
@@ -1032,6 +1136,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Performs a logical bitwise XOR on destination and source and stores the result in destination.
+
+------------
 
 ### Eq
 
@@ -1053,6 +1159,8 @@ Available parameter types:
 
 Resets control flags in control byte and sets the `Equal`, `BiggerEqual` and `SmallerEqual` flags if and only if `destination == source`.
 
+------------
+
 ### Neq
 
 Alternative name: Set unequal control flag.
@@ -1072,6 +1180,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Resets control flags in control byte and sets the `Unequal` flag if and only if `destination != source`.
+
+------------
 
 ### Lt
 
@@ -1093,6 +1203,8 @@ Available parameter types:
 
 Resets control flags in control byte and sets the `Unequal` and `Smaller` flags if and only if `destination < source`.
 
+------------
+
 ### Bt
 
 Alternative name: Set unequal and bigger control flags.
@@ -1112,6 +1224,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Resets control flags in control byte and sets the `Unequal` and `Bigger` flags if and only if `destination > source`.
+
+------------
 
 ### Loadload
 
@@ -1133,6 +1247,8 @@ Available parameter types:
 
 Loads the value that the parameter points to into destination.
 
+------------
+
 ### Alloc
 
 Alternative name: Load from indirect.
@@ -1152,6 +1268,8 @@ Available parameter types:
 | Value     | No     | Yes    |
 
 Allocates a memory block of size equal to second operand and stores the address of the allocated block of memory in the first operand.
+
+------------
 
 ### VCall
 
@@ -1179,6 +1297,8 @@ Performs it in following way:
 
 First operand represents the virtual table base address and the second operand represents the offset in that virtual table.
 
+------------
+
 ### RegInt, RRegInt
 
 Alternative name: Load from indirect.
@@ -1198,6 +1318,8 @@ Available parameter types:
 | Value     | Yes    | No     |
 
 Loads the value that the parameter points to into destination.
+
+------------
 
 ### GetNtvId
 
@@ -1220,6 +1342,8 @@ Available parameter types:
 Gets the native function identified by the string stored in the parameter.
 
 If there is no native identified by this name, writes -1 into the destination.
+
+------------
 
 ### Xchg
 
