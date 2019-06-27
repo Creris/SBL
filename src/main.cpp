@@ -10,9 +10,14 @@
 
 #include "interpreter/VM.hpp"
 
+#include "interpreter/CompiledHeader.hpp"
+
 int nativeCallCount = 0;
 
 void native_test(sbl::vm::State& state) {
+	//if (!nativeCallCount)
+	//	std::cout << "Privilege: " << state.currentPrivilege() << "\n";
+
 	++nativeCallCount;
 }
 
@@ -53,9 +58,10 @@ constexpr auto qqww = qqw();
 
 int main() {
 	static auto cast = [](auto m) constexpr { return static_cast<uint32_t>(m); };
+	using namespace sbl::vm;
 
 	///*
-	sbl::vm::VM vm;
+	VM vm;
 
 	vm.addNativeFunction("func", native_test, false);
 	vm.addNativeFunction("sqrt", native_test, false);
@@ -68,39 +74,83 @@ int main() {
 	std::vector<uint32_t> instructionStream = {
 	};
 
+
 	instructionStream.resize(1000, 0);
 
-	std::cout << sizeof(sbl::vm::VM) << "\n";
+	std::cout << "VM is of size " << sizeof(VM) << " bytes\n";
 
 	std::vector<uint32_t> instrToInsert = {
-		cast(sbl::vm::Mnemonic::Push_V), '\0nis', 0,
-		cast(sbl::vm::Mnemonic::GetNtvId_R_I), 0, 63,
-		cast(sbl::vm::Mnemonic::Add_R_V), 63, 1,
-		cast(sbl::vm::Mnemonic::PrintS_R), 0, 0,
+		//cast(Mnemonic::Mov_R_V), 500, 1,
+		cast(Mnemonic::NtvCall_V), 0, 0,
+		//cast(Mnemonic::SetExtPrivlg_V_V), 0, 255,
+		cast(Mnemonic::SetPrivlg_V), 100, 0,
+		//cast(Mnemonic::RRegInt_V_A), 251, 3 * 8,
+		//cast(Mnemonic::ICountInt_V), 1000000, 0,
+		
+		//cast(Mnemonic::FpPi_R), 15, 0,
+		//cast(Mnemonic::FpPrint_R), 150, 0,
+		//cast(Mnemonic::PrintC_V), '\n', 0,
+		cast(Mnemonic::RPCall_A_V), 3, 10,
+		cast(Mnemonic::End), 0, 0,
 
-		cast(sbl::vm::Mnemonic::NtvCall_V), 0, 0,
-		cast(sbl::vm::Mnemonic::RRegInt_V_A), 251, 6,
-		cast(sbl::vm::Mnemonic::ICountInt_V), 1000000, 0,
-		cast(sbl::vm::Mnemonic::RJmp_A), cast(-3), 0,
+		cast(Mnemonic::Mov_R_V), 10, 500000,
 
-		cast(sbl::vm::Mnemonic::End), 0, 0,
+		cast(Mnemonic::Loop), 0, 0,
+		cast(Mnemonic::RCall_A), 3 * 4, 0,
+		cast(Mnemonic::NtvCall_V), 0, 0,
+		cast(Mnemonic::Endloop), 0, 0,
+		cast(Mnemonic::Ret), 0, 0,
 
-		//cast(sbl::vm::Mnemonic::RICountInt_V), 3, 0,
-		cast(sbl::vm::Mnemonic::Mov_R_V), 10, 524288,
+		cast(Mnemonic::End), 0, 0,
 
-		cast(sbl::vm::Mnemonic::Loop), 0, 0,
-		cast(sbl::vm::Mnemonic::Push_V), 1234, 0,
-		cast(sbl::vm::Mnemonic::Mov_R_V), 4, 256,
-		cast(sbl::vm::Mnemonic::Push_R), 4, 0,
-		cast(sbl::vm::Mnemonic::Pop_R), 5, 0,
-		cast(sbl::vm::Mnemonic::Pop_R), 6, 0,
-		cast(sbl::vm::Mnemonic::Mov_R_V), 11, 0,
-		//cast(sbl::vm::Mnemonic::NtvCall_V), 1, 0,
-		cast(sbl::vm::Mnemonic::Endloop), 0, 0,
+		cast(Mnemonic::Add_R_V), 1, 1,
+		cast(Mnemonic::Ret), 0, 0,
+		
+		//cast(Mnemonic::RJmp_A), cast(-3), 0,
+
+		cast(Mnemonic::End), 0, 0,
+
+
+		cast(Mnemonic::SetInstrPrivlg_V_V), cast(Mnemonic::Mod_R_V), 1,
+		cast(Mnemonic::RRegInt_V_A), cast(InterruptType::InsufficientPrivilege), 3,
+		cast(Mnemonic::RJmp_A), 4 * 3, 0,
+
+		cast(Mnemonic::IRet), 0, 0,
+
+		//Unprivileged function
+		cast(Mnemonic::Mov_R_V), 2, 10,
+		cast(Mnemonic::Mod_R_V), 2, 3,
+		//cast(Mnemonic::NtvCall_R), 2, 0,
+		cast(Mnemonic::Ret), 0, 0,
+
+		cast(Mnemonic::SetPrivlg_V), 200, 0,
+		cast(Mnemonic::Mov_R_V), 10, 524288,
+		cast(Mnemonic::Loop), 0, 0,
+		cast(Mnemonic::RCall_A), cast(-7 * 3), 0,
+		cast(Mnemonic::NtvCall_V), 1, 0,
+		//cast(Mnemonic::RPCall_A_V), cast(-6 * 3), 100,
+		cast(Mnemonic::Endloop), 0, 0,
+
+		//cast(Mnemonic::RJmp_A), cast(-3), 0,
+
+		cast(Mnemonic::End), 0, 0,
+
+		//cast(Mnemonic::RICountInt_V), 3, 0,
+		cast(Mnemonic::Mov_R_V), 10, 524288,
+
+		cast(Mnemonic::Loop), 0, 0,
+		cast(Mnemonic::Push_V), 1234, 0,
+		cast(Mnemonic::Mov_R_V), 4, 256,
+		cast(Mnemonic::Push_R), 4, 0,
+		cast(Mnemonic::Pop_R), 5, 0,
+		cast(Mnemonic::Pop_R), 6, 0,
+		cast(Mnemonic::Mov_R_V), 11, 0,
+		//cast(Mnemonic::NtvCall_V), 1, 0,
+		cast(Mnemonic::Endloop), 0, 0,
 	};
 
 	instructionStream.insert(instructionStream.end(), instrToInsert.begin(), instrToInsert.end());
-	instructionStream.push_back(cast(sbl::vm::Mnemonic::End));
+	instructionStream.push_back(cast(Mnemonic::End));
 	instructionStream.push_back(0);
 	instructionStream.push_back(0);
 
@@ -182,39 +232,39 @@ int main() {
 	//*/
 
 	/*std::vector<uint8_t> instrStream = /*{
-		192, cast(sbl::vm::Mnemonic::Add_A_R), 0xFF, 0, 0, 0, 21,
-		192, cast(sbl::vm::Mnemonic::Eq_R_R), 10, 11,
-		cast(sbl::vm::Mnemonic::Loop),
-		cast(sbl::vm::Mnemonic::Pop_A), 0xaa, 0xbb, 0xcc, 0xdd,
-		cast(sbl::vm::Mnemonic::Pop_R), 14,
-		cast(sbl::vm::Mnemonic::End)
+		192, cast(Mnemonic::Add_A_R), 0xFF, 0, 0, 0, 21,
+		192, cast(Mnemonic::Eq_R_R), 10, 11,
+		cast(Mnemonic::Loop),
+		cast(Mnemonic::Pop_A), 0xaa, 0xbb, 0xcc, 0xdd,
+		cast(Mnemonic::Pop_R), 14,
+		cast(Mnemonic::End)
 	};
 	///
 	{
-		192, cast(sbl::vm::Mnemonic::Add_A_R), 0, 0, 0xFF, 0, 0, 0, 21, 0, 0, 0,
-		192, cast(sbl::vm::Mnemonic::Eq_R_R), 0, 0, 10, 11, 0, 0, 0, 0, 0, 0,
-		cast(sbl::vm::Mnemonic::Loop), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		cast(sbl::vm::Mnemonic::Pop_A), 0, 0, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0, 0, 0, 0,
-		cast(sbl::vm::Mnemonic::Pop_R), 0, 0, 0, 14, 0, 0, 0, 0, 0, 0,
-		cast(sbl::vm::Mnemonic::End), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+		192, cast(Mnemonic::Add_A_R), 0, 0, 0xFF, 0, 0, 0, 21, 0, 0, 0,
+		192, cast(Mnemonic::Eq_R_R), 0, 0, 10, 11, 0, 0, 0, 0, 0, 0,
+		cast(Mnemonic::Loop), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		cast(Mnemonic::Pop_A), 0, 0, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0, 0, 0, 0,
+		cast(Mnemonic::Pop_R), 0, 0, 0, 14, 0, 0, 0, 0, 0, 0,
+		cast(Mnemonic::End), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 	};*/
 
 	auto to32 = [](uint8_t u1, uint8_t u2, uint8_t u3, uint8_t u4) -> uint32_t {
 		return (u1 << 24) | (u2 << 16) | (u3 << 8) | u4;
 	};
 
-	auto mnemoTo32 = [](sbl::vm::Mnemonic mn) {
+	auto mnemoTo32 = [](Mnemonic mn) {
 		return (static_cast<uint16_t>(mn) << 16);
 	};
 
 	std::vector<uint32_t> instream = {
-		cast(sbl::vm::Mnemonic::Add_A_R), 0xFF000000, 0x15000000,
-		cast(sbl::vm::Mnemonic::Eq_R_R), 0xFF000000, 0x15000000,
-		cast(sbl::vm::Mnemonic::Loop), 0, 0,
-		cast(sbl::vm::Mnemonic::Pop_A), 0xddccbbaa, 0,
-		cast(sbl::vm::Mnemonic::Pop_R), 0xE000000, 0,
-		cast(sbl::vm::Mnemonic::Add_A_R), 0xFF000000, 0x15000000,
-		cast(sbl::vm::Mnemonic::Lt_I_R), 0, 0,
+		cast(Mnemonic::Add_A_R), 0xFF000000, 0x15000000,
+		cast(Mnemonic::Eq_R_R), 0xFF000000, 0x15000000,
+		cast(Mnemonic::Loop), 0, 0,
+		cast(Mnemonic::Pop_A), 0xddccbbaa, 0,
+		cast(Mnemonic::Pop_R), 0xE000000, 0,
+		cast(Mnemonic::Add_A_R), 0xFF000000, 0x15000000,
+		cast(Mnemonic::Lt_I_R), 0, 0,
 	};
 
 	
@@ -231,12 +281,12 @@ int main() {
 		instrStream.insert(instrStream.end(), cpy.begin(), cpy.end());
 	}*/
 
-	sbl::vm::Instruction m;
+	Instruction m;
 	uint32_t instrOffset = 0;
 
 	std::vector<uint64_t> nanosPerf;
 
-	sbl::vm::Instruction* cached = nullptr;
+	Instruction* cached = nullptr;
 
 	for (int i = 0; i < 1000; ++i) {
 		auto start = std::chrono::high_resolution_clock::now().time_since_epoch();

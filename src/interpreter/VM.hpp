@@ -5,18 +5,15 @@
 
 #include <vector>
 #include <array>
-#include <string_view>
-#include <limits>
+#include <cstdint>
 #include <string>
 #include <chrono>
-#include <thread>
 #include <iostream>
 #include <iomanip>
 
 #include "../common/Instruction.hpp"
 #include "../common/FixedVector.hpp"
 
-#include <stdint.h>   // for uint32_t
 #include <limits.h>   // for CHAR_BIT
 
 namespace sbl::vm {
@@ -56,75 +53,12 @@ namespace sbl::vm {
 		}
 	}
 
-	struct CompiledHeader {
-		uint32_t signature;
-		uint32_t startAddress;
-		uint32_t stackSize;
-		uint32_t padding[5];
-
-		/*
-			Visual Studio 2017 IntelliSense has an issue with this being default,
-			so we have to provide dummy body
-		 */
-		constexpr CompiledHeader() noexcept : signature(0), startAddress(0), stackSize(0), padding() {}
-
-		constexpr CompiledHeader(const CompiledHeader&) noexcept = default;
-		constexpr CompiledHeader(CompiledHeader&&) noexcept = default;
-
-		constexpr CompiledHeader& operator=(const CompiledHeader& other) noexcept {
-			signature = other.signature;
-			startAddress = other.startAddress;
-			stackSize = other.stackSize;
-			for (int i = 0; i < 5; ++i)  padding[i] = other.padding[i];
-			return *this;
-		}
-
-		constexpr CompiledHeader& operator=(CompiledHeader&& other) noexcept {
-			signature = other.signature;
-			startAddress = other.startAddress;
-			stackSize = other.stackSize;
-			for (int i = 0; i < 5; ++i)  padding[i] = other.padding[i];
-			return *this;
-		}
-
-		~CompiledHeader() noexcept = default;
-
-		constexpr CompiledHeader(uint32_t _sig,
-			uint32_t startAddr,
-			uint32_t stack) : signature(_sig), startAddress(startAddr),
-			stackSize(stack), padding() {}
-
-		constexpr bool validate() const {
-			return ((signature >> 24) & 0xff) == 's' &&
-				((signature >> 16) & 0xff) == 'b' &&
-				((signature >> 8) & 0xff) == 'l' &&
-				((signature) & 0xff) == 'x';
-		}
-
-		constexpr void fromString(std::string_view view) {
-			if (view.size() < sizeof(*this))
-				return;
-
-			auto unsign = [](const char v) -> uint8_t { return static_cast<uint8_t>(v); };
-			auto oneByte = [unsign](const auto v, const auto shift) -> uint32_t {
-				return (unsign(v) & 0xff) << shift;
-			};
-
-			signature = oneByte(view[0], 24) | oneByte(view[1], 16) | oneByte(view[2], 8) | oneByte(view[3], 0);
-			view.remove_prefix(4);
-			startAddress = oneByte(view[0], 24) | oneByte(view[1], 16) | oneByte(view[2], 8) | oneByte(view[3], 0);
-			view.remove_prefix(4);
-			stackSize = oneByte(view[0], 24) | oneByte(view[1], 16) | oneByte(view[2], 8) | oneByte(view[3], 0);
-		}
-	};
-
 	namespace ch = std::chrono;
 
 	enum class InterruptType : uint8_t {
+		InsufficientPrivilege = 250,
 		InstrCount = 251,
-		Unused1 = 252,
-		Unused2 = 253,
-		Unused3 = 254,
+		UnprivilegedExec = 252,
 		NoInterrupt = 255
 	};
 
@@ -137,7 +71,14 @@ namespace sbl::vm {
 		InvalidInterruptId,
 		NestedInterrupt,
 		InvalidNativeId,
-		StackUnderflow,
+		StackOverrflow,
+		UnpirivlegedInstrExec,
+		UnprivilegedIntRaise,
+		InvalidRegisterId,
+
+		DisabledExtensionUse,
+
+		UnknownError,
 	};
 
 	struct Error {
@@ -147,26 +88,9 @@ namespace sbl::vm {
 
 	class VM;
 
-	struct State {
-		uint64_t& instrCount;
-		uint64_t& nextInstrCountInterrupt;
-		uint32_t& controlByte;
-
-		std::array<uint32_t, 64>& registers;
-
-		uint32_t*& program;
-
-		uint32_t& stackPtr;
-		uint32_t& instrPtr;
-		uint32_t& basePtr;
-		uint32_t& loopPtr;
-		
-		InterruptType& handling;
-
-		Error& errorCode;
-
-		bool& running;
-		
+	class State {
+		VM* vm;
+	public:
 		explicit State(VM& vm);
 
 		State(const State&) = delete;
@@ -177,13 +101,38 @@ namespace sbl::vm {
 		uint32_t nextParameter();
 		std::vector<uint32_t> nextParameters(size_t count);
 		void returnValue(uint32_t value);
+
+		uint32_t instrPtr() const;
+		Error currentError() const;
+		InterruptType currentInterrupt() const;
+		bool isIntEnabled(uint8_t intCode) const;
+
+		uint32_t currentPrivilege() const;
+		uint32_t instrPrivilegeRequired(Mnemonic m) const;
+		uint32_t interruptPrivilege(uint8_t intCode) const;
+
+		void addArgument(uint32_t arg);
+		void runFunction(uint32_t address);
+		void runFunction(uint32_t address, uint8_t privilege);
+	};
+
+	struct InterruptData {
+		uint8_t enabled = 0;
+		uint8_t privilege = 255;
+		uint8_t privilegeRequired = 0;
+		uint32_t addr = 0;
+	};
+
+	struct ExtensionData {
+		uint8_t privilege = 0;
+		uint8_t enabled = true;
 	};
 
 	class VM {
 	public:
 		using NativeFunc = void(*)(vm::State&);
 	private:
-		friend struct vm::State;
+		friend vm::State;
 
 		enum ControlFlags {
 			TestSmaller = 1 << 0,
@@ -192,30 +141,46 @@ namespace sbl::vm {
 			TestBiggerEqual = 1 << 3,
 			TestSmallerEqual = 1 << 4,
 			TestUnequal = 1 << 5,
+			TestFloatPositive = 1 << 6,
+			TestFloatNegative = 1 << 7,
+			TestFloatNan = 1 << 8,
+			TestFloatInf = 1 << 9,
 		};
 
 		uint64_t instrCount = 0;
 		uint64_t nextInstrCountInterrupt = 0;
 		uint32_t controlByte = 0;
 		std::array<uint32_t, 64> registers;
+		std::array<float, 16> fpregisters;
 
 		uint32_t* program;
+		uint32_t callDepth;
 
 		bool running = true;
+		uint8_t privilegeLevel;
 
 		uint32_t& stackPtr = registers[63];
 		uint32_t& instrPtr = registers[62];
 		uint32_t& basePtr = registers[61];
 		uint32_t& loopPtr = registers[60];
 
+		enum Extensions : uint8_t {
+			FloatOperations = 0,
+
+			TotalCount,
+		};
+
+		std::array<uint8_t, static_cast<uint32_t>(Mnemonic::TotalCount)> instrPrivileges;
+		std::array<ExtensionData, static_cast<uint8_t>(Extensions::TotalCount)> extensionData;
+
 		static constexpr int uint8_tmax = std::numeric_limits<uint8_t>::max() + 1;
 
-		cmn::FixedVector<std::pair<uint32_t, uint32_t>, uint8_tmax> interrupts;
-		cmn::FixedVector<std::pair<uint32_t, uint32_t>, uint8_tmax> interruptsRestore;
+		cmn::FixedVector<InterruptData, uint8_tmax> interrupts;
+		decltype(interrupts) interruptsRestore;
 
 		InterruptType handling = InterruptType::NoInterrupt;
 
-		Error errorCode;
+		Error error;
 		ch::nanoseconds startExecTime;
 		ch::nanoseconds endExecTime;
 
@@ -223,6 +188,24 @@ namespace sbl::vm {
 		bool namesSorted = false;
 
 		State innerState;
+
+		__forceinline uint32_t& _accessRegister(uint32_t index) {
+			if (index >= registers.size()) {
+				error = Error{ ErrorCode::InvalidRegisterId, instrPtr };
+				running = false;
+				throw ErrorCode::InvalidRegisterId;
+			}
+			return registers[index];
+		}
+
+		__forceinline float& _accessFpRegister(uint32_t index) {
+			if (index >= fpregisters.size()) {
+				error = Error{ ErrorCode::InvalidRegisterId, instrPtr };
+				running = false;
+				throw ErrorCode::InvalidRegisterId;
+			}
+			return fpregisters[index];
+		}
 
 		int32_t _binary_search(const std::string& val) {
 			int32_t lower = 0;
@@ -240,7 +223,7 @@ namespace sbl::vm {
 			return -1;
 		}
 
-		int32_t _findNativeByName(const std::string& s) {
+		__forceinline int32_t _findNativeByName(const std::string& s) {
 			if (!namesSorted) {
 				finalizeNatives();
 			}
@@ -249,13 +232,13 @@ namespace sbl::vm {
 		}
 
 		void _onInvalidDecode() {
-			errorCode = { ErrorCode::InvalidInstruction, instrPtr };
+			error = { ErrorCode::InvalidInstruction, instrPtr };
 			running = false;
 		}
 
-		auto _pushStack(uint32_t value) {
+		__forceinline auto _pushStack(uint32_t value) {
 			if (!stackPtr) {
-				errorCode = { ErrorCode::StackUnderflow, instrPtr };
+				error = { ErrorCode::StackOverrflow, instrPtr };
 				running = false;
 				return;
 			}
@@ -264,67 +247,74 @@ namespace sbl::vm {
 			stackPtr--;
 		};
 
-		auto _popStack() {
+		__forceinline auto _popStack() {
 			return program[stackPtr++];
 		};
 
-		auto _popStackRef(uint32_t& ref) {
+		__forceinline auto _popStackRef(uint32_t& ref) {
 			ref = _popStack();
 		};
 
-		auto _write(uint32_t* from, uint32_t* to) {
+		__forceinline auto _write(uint32_t* from, uint32_t* to) {
 			while (*from)
 				*(to++) = *(from++);
 		}
 
-		auto _writeN(uint32_t* from, size_t count, uint32_t* to) {
+		__forceinline auto _writeN(uint32_t* from, size_t count, uint32_t* to) {
 			while (count--)
 				*(to++) = *(from++);
 		}
 
-		auto _write8(uint8_t* from, uint8_t* to) {
+		__forceinline auto _write8(uint8_t* from, uint8_t* to) {
 			while (*from)
 				*(to++) = *(from++);
 		}
 
-		auto _write8N(uint8_t* from, size_t count, uint8_t* to) {
+		__forceinline auto _write8N(uint8_t* from, size_t count, uint8_t* to) {
 			while (count--)
 				*(to++) = *(from++);
 		}
 
-		auto _writeTime(uint64_t time, uint32_t* addr) {
+		__forceinline auto _writeTime(uint64_t time, uint32_t* addr) {
 			*addr = time & 0xFFFFFFFF;
 			*(addr + 1) = (time >> 32) & 0xFFFFFFFF;
 		}
 
-		void _setNextInstrCountInt(uint32_t lower, uint32_t upper) {
-			nextInstrCountInterrupt = (upper << 32) | lower;
+		__forceinline void _setNextInstrCountInt(uint32_t lower, uint32_t upper) {
+			nextInstrCountInterrupt = (static_cast<uint64_t>(upper) << 32) | lower;
 		}
 
-		void _setNextInstrCountInt(uint64_t last, uint32_t lower, uint32_t upper) {
-			nextInstrCountInterrupt = last + ((upper << 32) | lower);
+		__forceinline void _setNextInstrCountInt(uint64_t last, uint32_t lower, uint32_t upper) {
+			nextInstrCountInterrupt = last + ((static_cast<uint64_t>(upper) << 32) | lower);
 		}
 
-		void setControl(uint32_t left, uint32_t right) {
+		__forceinline void setControl(uint32_t left, uint32_t right) {
 			controlByte = 0;
 			if (left > right)		controlByte |= (TestBigger | TestUnequal | TestBiggerEqual);
 			else if (left < right)	controlByte |= (TestSmaller | TestUnequal | TestSmallerEqual);
 			else					controlByte |= (TestSmallerEqual | TestEqual | TestBiggerEqual);
 		}
 
-		void setControl(bool b, ControlFlags flags) {
+		__forceinline void setFloatControl(float left, float right) {
+			controlByte = 0;
+			if (left > right)		controlByte |= (TestBigger | TestUnequal | TestBiggerEqual);
+			else if (left < right)	controlByte |= (TestSmaller | TestUnequal | TestSmallerEqual);
+			else					controlByte |= (TestSmallerEqual | TestEqual | TestBiggerEqual);
+		}
+
+		__forceinline void setControl(bool b, ControlFlags flags) {
 			controlByte = 0;
 			if (b)	controlByte |= flags;
 		}
 
-		auto getTime(ch::nanoseconds start) {
+		__forceinline auto getTime(ch::nanoseconds start) {
 			using clock = ch::high_resolution_clock;
 			return ch::duration_cast<ch::microseconds>(clock::now().time_since_epoch() - start).count();
 		}
 
-		void _doNativeCall(uint32_t code) {
+		__forceinline void _doNativeCall(uint32_t code) {
 			if (code > natives.size()) {
-				errorCode = { ErrorCode::InvalidNativeId, instrPtr };
+				error = { ErrorCode::InvalidNativeId, instrPtr };
 				running = false;
 				return;
 			}
@@ -332,9 +322,9 @@ namespace sbl::vm {
 			natives[code].second(innerState);
 		}
 
-		bool _validateInterruptCode(uint32_t code) {
+		__forceinline bool _validateInterruptCode(uint32_t code) {
 			if (code >= 255) {
-				errorCode = { ErrorCode::InvalidInterruptId, instrPtr };
+				error = { ErrorCode::InvalidInterruptId, instrPtr };
 				running = false;
 				return false;
 			}
@@ -351,7 +341,7 @@ namespace sbl::vm {
 
 			switch (nextInstr->mnemonic) {
 				case Mnemonic::Ret:
-					errorCode = { ErrorCode::RetInInterrupt, instrPtr };
+					error = { ErrorCode::RetInInterrupt, instrPtr };
 					running = false;
 					return false;
 				case Mnemonic::IRet:
@@ -363,59 +353,123 @@ namespace sbl::vm {
 
 		int _runInterruptCode(uint32_t code) {
 			if (!_validateInterruptCode(code))	return 0;
-			else if (!interrupts[code].first)	return 1;
-			auto addr = interrupts[code].second;
+			else if (!interrupts[code].enabled)	return 1;
+
+			auto addr = interrupts[code].addr;
 			if (!addr)	return 0;
 
 			if (handling != InterruptType::NoInterrupt) {
-				errorCode = { ErrorCode::NestedInterrupt, instrPtr };
+				error = { ErrorCode::NestedInterrupt, instrPtr };
 				running = false;
 				return 0;
 			}
 
 			handling = static_cast<InterruptType>(code);
-			//auto oldInstr = instrPtr;
+			//Store registers
 			auto regCpy = registers;
 			instrPtr = addr;
 
-			/*//Store registers on stack
-			for (size_t i = 0, j = registers.size(); i < j; ++i) {
-				_pushStack(registers[i]);
-			}
-			*/
+			//store old privilege
+			auto oldPriv = privilegeLevel;
+			//set privilege level to the one designated for the interrupt
+			privilegeLevel = interrupts[code].privilege;
 
 			while (_executeInterrupt()) {
 			}
 
 			bool wasEnd = Instruction::fromStream(program, instrPtr - 3)->mnemonic == Mnemonic::End;
+
 			//Restore registers
 			registers = regCpy;
+			//Restore privilege
+			privilegeLevel = oldPriv;
 
 			if (wasEnd)
 				return 2;
 
 			if (!running)	return 0;
 
-			/*
-			for (int32_t i = static_cast<int32_t>(registers.size()) - 1, j = 0; i >= j; --i) {
-				registers[i] = _popStack();
-			}
-			*/
-
-			//instrPtr = oldInstr;
 			handling = InterruptType::NoInterrupt;
 			return 1;
 		}
 
-		void _setInterruptEnabled(uint32_t code, bool enabled) {
+		__forceinline void _setInterruptEnabled(uint32_t code, bool enabled) {
 			if (!_validateInterruptCode(code))	return;
-			interrupts[code].first = enabled;
+			interrupts[code].enabled = enabled;
 		}
 
-		void _setInterruptHandler(uint32_t code, uint32_t addr) {
+		__forceinline void _setInterruptHandler(uint32_t code, uint32_t addr) {
 			if (!_validateInterruptCode(code))	return;
-			interrupts[code].second = addr;
-			interrupts[code].first = true;
+			interrupts[code].addr = addr;
+			interrupts[code].enabled = true;
+		}
+
+		__forceinline bool _testPrivilege(uint8_t totest, ErrorCode ec = ErrorCode::UnpirivlegedInstrExec) {
+			if (totest > privilegeLevel) {
+				auto oldR59 = registers[59];
+				registers[59] = totest;
+				bool b = _runInterruptCode(static_cast<uint32_t>(InterruptType::InsufficientPrivilege));
+				registers[59] = oldR59;
+				bool enabled = interrupts[static_cast<uint8_t>(InterruptType::InsufficientPrivilege)].enabled;
+				if (!b || !enabled) {
+					error = { ec, instrPtr };
+					running = false;
+					return false;
+				}
+				return true;
+			}
+			return true;
+		}
+
+		bool _executeFunc(uint32_t startingAddr) {
+			if (!running)	return false;
+
+			int nestedDepth = callDepth - 1;
+			auto oldInstr = instrPtr;
+			instrPtr = startingAddr;
+			
+			//Need to push because the escape from this is through
+			//Ret, which will pop the stack.
+			_pushStack(instrPtr);
+
+			while (nestedDepth != callDepth) {
+				++instrCount;
+
+				if (nextInstrCountInterrupt && instrCount > nextInstrCountInterrupt) {
+					int b = _runInterruptCode(static_cast<uint32_t>(InterruptType::InstrCount));
+					nextInstrCountInterrupt = 0;
+					if (!b) {
+						error = { ErrorCode::UnhandledTimeInterrupt, instrPtr };
+						running = false;
+						return false;
+					}
+					else if (b == 2)
+						return false;
+				}
+
+				// Literally the entire decode in 2 lines of code:
+				auto nextInstr = Instruction::fromStream(program, instrPtr);
+				instrPtr += 3;
+
+				bool b = _perform(nextInstr);
+				if (!b) {
+					instrPtr = oldInstr;
+					return false;
+				}
+			}
+
+			instrPtr = oldInstr;
+			return true;
+		}
+
+		__forceinline bool _executeFunc(uint32_t addr, uint8_t withPrivilege) {
+			if (!_testPrivilege(withPrivilege))
+				return false;
+			auto oldPriv = privilegeLevel;
+			privilegeLevel = withPrivilege;
+			bool b = _executeFunc(addr);
+			privilegeLevel = oldPriv;
+			return b;
 		}
 
 		bool _execute() {
@@ -424,20 +478,15 @@ namespace sbl::vm {
 			++instrCount;
 			
 			if (nextInstrCountInterrupt && instrCount > nextInstrCountInterrupt) {
-				if (handling != InterruptType::NoInterrupt) {
-					nextInstrCountInterrupt++;
+				int b = _runInterruptCode(static_cast<uint32_t>(InterruptType::InstrCount));
+				nextInstrCountInterrupt = 0;
+				if (!b) {
+					error = { ErrorCode::UnhandledTimeInterrupt, instrPtr };
+					running = false;
+					return false;
 				}
-				else {
-					int b = _runInterruptCode(static_cast<uint32_t>(InterruptType::InstrCount));
-					nextInstrCountInterrupt = 0;
-					if (!b) {
-						errorCode = { ErrorCode::UnhandledTimeInterrupt, instrPtr };
-						running = false;
-						return false;
-					}
-					else if (b == 2)
-						return false;
-				}
+				else if (b == 2)
+					return false;
 			}
 
 			// Literally the entire decode in 2 lines of code:
@@ -448,6 +497,16 @@ namespace sbl::vm {
 		}
 
 		bool _perform(Instruction* nextInstr) {
+			auto mnem_v = static_cast<uint32_t>(nextInstr->mnemonic);
+			if (mnem_v >= Mnemonic::TotalCount) {
+				_onInvalidDecode();
+				return false;
+			}
+			
+			if (!_testPrivilege(instrPrivileges[mnem_v])) {
+				return false;
+			}
+
 			switch (nextInstr->mnemonic) {
 				case Mnemonic::Nop:
 				case Mnemonic::Dealloc_R:
@@ -465,30 +524,16 @@ namespace sbl::vm {
 				case Mnemonic::Alloc_I_A:
 				case Mnemonic::Alloc_I_I:
 				case Mnemonic::Alloc_I_V:
-				case Mnemonic::Vcall_R_R:
-				case Mnemonic::Vcall_R_A:
-				case Mnemonic::Vcall_R_I:
-				case Mnemonic::Vcall_R_V:
-				case Mnemonic::Vcall_A_R:
-				case Mnemonic::Vcall_A_A:
-				case Mnemonic::Vcall_A_I:
-				case Mnemonic::Vcall_A_V:
-				case Mnemonic::Vcall_I_R:
-				case Mnemonic::Vcall_I_A:
-				case Mnemonic::Vcall_I_I:
-				case Mnemonic::Vcall_I_V:
-				case Mnemonic::Vcall_V_R:
-				case Mnemonic::Vcall_V_A:
-				case Mnemonic::Vcall_V_I:
-				case Mnemonic::Vcall_V_V:
 				case Mnemonic::IRet:
 
 					break;
 				case Mnemonic::Halt:
 				case Mnemonic::End:
 					return false;
+					break;
 				case Mnemonic::Ret:
 					instrPtr = _popStack();
+					callDepth--;
 					break;
 				case Mnemonic::Loop:
 					_pushStack(loopPtr);
@@ -503,7 +548,7 @@ namespace sbl::vm {
 					}
 					break;
 				case Mnemonic::Push_R:
-					_pushStack(registers[nextInstr->arg1]);
+					_pushStack(_accessRegister(nextInstr->arg1));
 					break;
 				case Mnemonic::Push_A:
 					_pushStack(program[nextInstr->arg1]);
@@ -515,7 +560,7 @@ namespace sbl::vm {
 					_pushStack(nextInstr->arg1);
 					break;
 				case Mnemonic::Pop_R:
-					registers[nextInstr->arg1] = _popStack();
+					_accessRegister(nextInstr->arg1) = _popStack();
 					break;
 				case Mnemonic::Pop_A:
 					program[nextInstr->arg1] = _popStack();
@@ -524,7 +569,7 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] = _popStack();
 					break;
 				case Mnemonic::Inc_R:
-					registers[nextInstr->arg1]++;
+					_accessRegister(nextInstr->arg1)++;
 					break;
 				case Mnemonic::Inc_A:
 					program[nextInstr->arg1]++;
@@ -533,7 +578,7 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]]++;
 					break;
 				case Mnemonic::Dec_R:
-					registers[nextInstr->arg1]--;
+					_accessRegister(nextInstr->arg1)--;
 					break;
 				case Mnemonic::Dec_A:
 					program[nextInstr->arg1]--;
@@ -543,30 +588,36 @@ namespace sbl::vm {
 					break;
 				case Mnemonic::Call_R:
 					_pushStack(instrPtr);
-					instrPtr = registers[nextInstr->arg1];
+					instrPtr = _accessRegister(nextInstr->arg1);
+					++callDepth;
 					break;
 				case Mnemonic::Call_A:
 					_pushStack(instrPtr);
 					instrPtr = nextInstr->arg1;
+					++callDepth;
 					break;
 				case Mnemonic::Call_I:
 					_pushStack(instrPtr);
 					instrPtr = program[registers[nextInstr->arg1]];
+					++callDepth;
 					break;
 				case Mnemonic::RCall_R:
 					_pushStack(instrPtr);
-					instrPtr += registers[nextInstr->arg1];
+					instrPtr += _accessRegister(nextInstr->arg1);
+					++callDepth;
 					break;
 				case Mnemonic::RCall_A:
 					_pushStack(instrPtr);
 					instrPtr += nextInstr->arg1;
+					++callDepth;
 					break;
 				case Mnemonic::RCall_I:
 					_pushStack(instrPtr);
 					instrPtr += program[registers[nextInstr->arg1]];
+					++callDepth;
 					break;
 				case Mnemonic::Read_R:
-					std::cin >> registers[nextInstr->arg1];
+					std::cin >> _accessRegister(nextInstr->arg1);
 					break;
 				case Mnemonic::Read_A:
 					std::cin >> program[nextInstr->arg1];
@@ -581,7 +632,7 @@ namespace sbl::vm {
 					std::cin >> reinterpret_cast<char*>(&program[registers[nextInstr->arg1]]);
 					break;
 				case Mnemonic::Print_R:
-					std::cout << registers[nextInstr->arg1];
+					std::cout << _accessRegister(nextInstr->arg1);
 					break;
 				case Mnemonic::Print_A:
 					std::cout << program[nextInstr->arg1];
@@ -593,7 +644,7 @@ namespace sbl::vm {
 					std::cout << nextInstr->arg1;
 					break;
 				case Mnemonic::PrintS_R:
-					std::cout << static_cast<int32_t>(registers[nextInstr->arg1]);
+					std::cout << static_cast<int32_t>(_accessRegister(nextInstr->arg1));
 					break;
 				case Mnemonic::PrintS_A:
 					std::cout << static_cast<int32_t>(program[nextInstr->arg1]);
@@ -611,7 +662,7 @@ namespace sbl::vm {
 					std::cout << reinterpret_cast<char*>(&program[registers[nextInstr->arg1]]);
 					break;
 				case Mnemonic::Jmp_R:
-					instrPtr = registers[nextInstr->arg1];
+					instrPtr = _accessRegister(nextInstr->arg1);
 					break;
 				case Mnemonic::Jmp_A:
 					instrPtr = nextInstr->arg1;
@@ -622,7 +673,7 @@ namespace sbl::vm {
 				case Mnemonic::Jb_R:
 				case Mnemonic::Jnle_R:
 					if (controlByte & TestBigger) {
-						instrPtr = registers[nextInstr->arg1];
+						instrPtr = _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::Jb_A:
@@ -640,7 +691,7 @@ namespace sbl::vm {
 				case Mnemonic::Jnb_R:
 				case Mnemonic::Jle_R:
 					if (controlByte & TestSmallerEqual) {
-						instrPtr = registers[nextInstr->arg1];
+						instrPtr = _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::Jnb_A:
@@ -658,7 +709,7 @@ namespace sbl::vm {
 				case Mnemonic::Jbe_R:
 				case Mnemonic::Jnl_R:
 					if (controlByte & TestBiggerEqual) {
-						instrPtr = registers[nextInstr->arg1];
+						instrPtr = _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::Jbe_A:
@@ -676,7 +727,7 @@ namespace sbl::vm {
 				case Mnemonic::Jnbe_R:
 				case Mnemonic::Jl_R:
 					if (controlByte & TestSmaller) {
-						instrPtr = registers[nextInstr->arg1];
+						instrPtr = _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::Jnbe_A:
@@ -694,7 +745,7 @@ namespace sbl::vm {
 				case Mnemonic::Jz_R:
 				case Mnemonic::Je_R:
 					if (controlByte & TestEqual) {
-						instrPtr = registers[nextInstr->arg1];
+						instrPtr = _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::Jz_A:
@@ -712,7 +763,7 @@ namespace sbl::vm {
 				case Mnemonic::Jnz_R:
 				case Mnemonic::Jne_R:
 					if (controlByte & TestUnequal) {
-						instrPtr = registers[nextInstr->arg1];
+						instrPtr = _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::Jnz_A:
@@ -728,7 +779,7 @@ namespace sbl::vm {
 					}
 					break;
 				case Mnemonic::RJmp_R:
-					instrPtr += registers[nextInstr->arg1];
+					instrPtr += _accessRegister(nextInstr->arg1);
 					break;
 				case Mnemonic::RJmp_A:
 					instrPtr += nextInstr->arg1;
@@ -739,7 +790,7 @@ namespace sbl::vm {
 				case Mnemonic::RJb_R:
 				case Mnemonic::RJnle_R:
 					if (controlByte & TestBigger) {
-						instrPtr += registers[nextInstr->arg1];
+						instrPtr += _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::RJb_A:
@@ -757,7 +808,7 @@ namespace sbl::vm {
 				case Mnemonic::RJnb_R:
 				case Mnemonic::RJle_R:
 					if (controlByte & TestSmallerEqual) {
-						instrPtr += registers[nextInstr->arg1];
+						instrPtr += _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::RJnb_A:
@@ -775,7 +826,7 @@ namespace sbl::vm {
 				case Mnemonic::RJbe_R:
 				case Mnemonic::RJnl_R:
 					if (controlByte & TestBiggerEqual) {
-						instrPtr += registers[nextInstr->arg1];
+						instrPtr += _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::RJbe_A:
@@ -793,7 +844,7 @@ namespace sbl::vm {
 				case Mnemonic::RJnbe_R:
 				case Mnemonic::RJl_R:
 					if (controlByte & TestSmaller) {
-						instrPtr += registers[nextInstr->arg1];
+						instrPtr += _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::RJnbe_A:
@@ -811,7 +862,7 @@ namespace sbl::vm {
 				case Mnemonic::RJz_R:
 				case Mnemonic::RJe_R:
 					if (controlByte & TestEqual) {
-						instrPtr += registers[nextInstr->arg1];
+						instrPtr += _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::RJz_A:
@@ -829,7 +880,7 @@ namespace sbl::vm {
 				case Mnemonic::RJnz_R:
 				case Mnemonic::RJne_R:
 					if (controlByte & TestUnequal) {
-						instrPtr += registers[nextInstr->arg1];
+						instrPtr += _accessRegister(nextInstr->arg1);
 					}
 					break;
 				case Mnemonic::RJnz_A:
@@ -845,60 +896,74 @@ namespace sbl::vm {
 					}
 					break;
 				case Mnemonic::Not_R:
-					registers[nextInstr->arg1] = ~registers[nextInstr->arg1];
+					_accessRegister(nextInstr->arg1) = ~_accessRegister(nextInstr->arg1);
 					break;
 				case Mnemonic::Time_R:
-					registers[nextInstr->arg1] = static_cast<uint32_t>(getTime(startExecTime));
+					_accessRegister(nextInstr->arg1) = static_cast<uint32_t>(getTime(startExecTime));
 					break;
 				case Mnemonic::ICount_R:
-					registers[nextInstr->arg1] = static_cast<uint32_t>(instrCount);
+					_accessRegister(nextInstr->arg1) = static_cast<uint32_t>(instrCount);
 					break;
 				case Mnemonic::Raise_R:
-					_runInterruptCode(registers[nextInstr->arg1]);
+					if (!_testPrivilege(interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilegeRequired))
+						return false;
+					_runInterruptCode(_accessRegister(nextInstr->arg1));
 					break;
 				case Mnemonic::Raise_A:
+					if (!_testPrivilege(interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilegeRequired))
+						return false;
 					_runInterruptCode(program[nextInstr->arg1]);
 					break;
 				case Mnemonic::Raise_I:
+					if (!_testPrivilege(interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilegeRequired))
+						return false;
 					_runInterruptCode(program[registers[nextInstr->arg1]]);
 					break;
 				case Mnemonic::Raise_V:
+					if (!_testPrivilege(interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilegeRequired))
+						return false;
 					_runInterruptCode(nextInstr->arg1);
 					break;
 				case Mnemonic::DisableInt_R:
-					_setInterruptEnabled(registers[nextInstr->arg1], false);
+					_setInterruptEnabled(_accessRegister(nextInstr->arg1), false);
 					break;
 				case Mnemonic::DisableInt_V:
 					_setInterruptEnabled(nextInstr->arg1, false);
 					break;
 				case Mnemonic::EnableInt_R:
-					_setInterruptEnabled(registers[nextInstr->arg1], true);
+					_setInterruptEnabled(_accessRegister(nextInstr->arg1), true);
 					break;
 				case Mnemonic::EnableInt_V:
 					_setInterruptEnabled(nextInstr->arg1, true);
 					break;
 				case Mnemonic::ICountInt_R:
-					nextInstrCountInterrupt = registers[nextInstr->arg1];
+					nextInstrCountInterrupt = _accessRegister(nextInstr->arg1);
 					break;
 				case Mnemonic::ICountInt_V:
 					nextInstrCountInterrupt = nextInstr->arg1;
 					break;
+				case Mnemonic::RICountInt_R:
+					nextInstrCountInterrupt = static_cast<uint32_t>(instrCount) + _accessRegister(nextInstr->arg1);
+					break;
+				case Mnemonic::RICountInt_V:
+					nextInstrCountInterrupt = static_cast<uint32_t>(instrCount) + nextInstr->arg1;
+					break;
 				case Mnemonic::Mov_R_R:
-					registers[nextInstr->arg1] = registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) = _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mov_R_A:
-					registers[nextInstr->arg1] = program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) = program[nextInstr->arg2];
 					break;
 				case Mnemonic::Mov_R_I:
-					registers[nextInstr->arg1] = program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) = program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Mov_R_V:
 				case Mnemonic::Laddr_R_A:
 				case Mnemonic::Laddr_R_I:
-					registers[nextInstr->arg1] = nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) = nextInstr->arg2;
 					break;
 				case Mnemonic::Mov_A_R:
-					program[nextInstr->arg1] = registers[nextInstr->arg2];
+					program[nextInstr->arg1] = _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mov_A_A:
 					program[nextInstr->arg1] = program[nextInstr->arg2];
@@ -912,7 +977,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] = nextInstr->arg2;
 					break;
 				case Mnemonic::Mov_I_R:
-					program[registers[nextInstr->arg1]] = registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] = _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mov_I_A:
 					program[registers[nextInstr->arg1]] = program[nextInstr->arg2];
@@ -928,31 +993,31 @@ namespace sbl::vm {
 				case Mnemonic::Move_R_R:
 				case Mnemonic::Movz_R_R:
 					if (controlByte & TestEqual) {
-						registers[nextInstr->arg1] = registers[nextInstr->arg2];
+						_accessRegister(nextInstr->arg1) = _accessRegister(nextInstr->arg2);
 					}
 					break;
 				case Mnemonic::Move_R_A:
 				case Mnemonic::Movz_R_A:
 					if (controlByte & TestEqual) {
-						registers[nextInstr->arg1] = program[nextInstr->arg2];
+						_accessRegister(nextInstr->arg1) = program[nextInstr->arg2];
 					}
 					break;
 				case Mnemonic::Move_R_I:
 				case Mnemonic::Movz_R_I:
 					if (controlByte & TestEqual) {
-						registers[nextInstr->arg1] = program[registers[nextInstr->arg2]];
+						_accessRegister(nextInstr->arg1) = program[registers[nextInstr->arg2]];
 					}
 					break;
 				case Mnemonic::Move_R_V:
 				case Mnemonic::Movz_R_V:
 					if (controlByte & TestEqual) {
-						registers[nextInstr->arg1] = nextInstr->arg2;
+						_accessRegister(nextInstr->arg1) = nextInstr->arg2;
 					}
 					break;
 				case Mnemonic::Move_A_R:
 				case Mnemonic::Movz_A_R:
 					if (controlByte & TestEqual) {
-						program[nextInstr->arg1] = registers[nextInstr->arg2];
+						program[nextInstr->arg1] = _accessRegister(nextInstr->arg2);
 					}
 					break;
 				case Mnemonic::Move_A_A:
@@ -976,7 +1041,7 @@ namespace sbl::vm {
 				case Mnemonic::Move_I_R:
 				case Mnemonic::Movz_I_R:
 					if (controlByte & TestEqual) {
-						program[registers[nextInstr->arg1]] = registers[nextInstr->arg2];
+						program[registers[nextInstr->arg1]] = _accessRegister(nextInstr->arg2);
 					}
 					break;
 				case Mnemonic::Move_I_A:
@@ -1000,31 +1065,31 @@ namespace sbl::vm {
 				case Mnemonic::Movne_R_R:
 				case Mnemonic::Movnz_R_R:
 					if (controlByte & TestUnequal) {
-						registers[nextInstr->arg1] = registers[nextInstr->arg2];
+						_accessRegister(nextInstr->arg1) = _accessRegister(nextInstr->arg2);
 					}
 					break;
 				case Mnemonic::Movne_R_A:
 				case Mnemonic::Movnz_R_A:
 					if (controlByte & TestUnequal) {
-						registers[nextInstr->arg1] = program[nextInstr->arg2];
+						_accessRegister(nextInstr->arg1) = program[nextInstr->arg2];
 					}
 					break;
 				case Mnemonic::Movne_R_I:
 				case Mnemonic::Movnz_R_I:
 					if (controlByte & TestUnequal) {
-						registers[nextInstr->arg1] = program[registers[nextInstr->arg2]];
+						_accessRegister(nextInstr->arg1) = program[registers[nextInstr->arg2]];
 					}
 					break;
 				case Mnemonic::Movne_R_V:
 				case Mnemonic::Movnz_R_V:
 					if (controlByte & TestUnequal) {
-						registers[nextInstr->arg1] = nextInstr->arg2;
+						_accessRegister(nextInstr->arg1) = nextInstr->arg2;
 					}
 					break;
 				case Mnemonic::Movne_A_R:
 				case Mnemonic::Movnz_A_R:
 					if (controlByte & TestUnequal) {
-						program[nextInstr->arg1] = registers[nextInstr->arg2];
+						program[nextInstr->arg1] = _accessRegister(nextInstr->arg2);
 					}
 					break;
 				case Mnemonic::Movne_A_A:
@@ -1048,7 +1113,7 @@ namespace sbl::vm {
 				case Mnemonic::Movne_I_R:
 				case Mnemonic::Movnz_I_R:
 					if (controlByte & TestUnequal) {
-						program[registers[nextInstr->arg1]] = registers[nextInstr->arg2];
+						program[registers[nextInstr->arg1]] = _accessRegister(nextInstr->arg2);
 					}
 					break;
 				case Mnemonic::Movne_I_A:
@@ -1070,19 +1135,19 @@ namespace sbl::vm {
 					}
 					break;
 				case Mnemonic::Add_R_R:
-					registers[nextInstr->arg1] += registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) += _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Add_R_I:
-					registers[nextInstr->arg1] += program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) += program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Add_R_A:
-					registers[nextInstr->arg1] += program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) += program[nextInstr->arg2];
 					break;
 				case Mnemonic::Add_R_V:
-					registers[nextInstr->arg1] += nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) += nextInstr->arg2;
 					break;
 				case Mnemonic::Add_I_R:
-					program[registers[nextInstr->arg1]] += registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] += _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Add_I_I:
 					program[registers[nextInstr->arg1]] += program[registers[nextInstr->arg2]];
@@ -1094,7 +1159,7 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] += nextInstr->arg2;
 					break;
 				case Mnemonic::Add_A_R:
-					program[nextInstr->arg1] += registers[nextInstr->arg2];
+					program[nextInstr->arg1] += _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Add_A_I:
 					program[nextInstr->arg1] += program[registers[nextInstr->arg2]];
@@ -1106,19 +1171,19 @@ namespace sbl::vm {
 					program[nextInstr->arg1] += nextInstr->arg2;
 					break;
 				case Mnemonic::Sub_R_R:
-					registers[nextInstr->arg1] -= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) -= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Sub_R_A:
-					registers[nextInstr->arg1] -= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) -= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Sub_R_I:
-					registers[nextInstr->arg1] -= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) -= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Sub_R_V:
-					registers[nextInstr->arg1] -= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) -= nextInstr->arg2;
 					break;
 				case Mnemonic::Sub_A_R:
-					program[nextInstr->arg1] -= registers[nextInstr->arg2];
+					program[nextInstr->arg1] -= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Sub_A_A:
 					program[nextInstr->arg1] -= program[nextInstr->arg2];
@@ -1130,7 +1195,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] -= nextInstr->arg2;
 					break;
 				case Mnemonic::Sub_I_R:
-					program[registers[nextInstr->arg1]] -= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] -= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Sub_I_A:
 					program[registers[nextInstr->arg1]] -= program[nextInstr->arg2];
@@ -1142,19 +1207,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] -= nextInstr->arg2;
 					break;
 				case Mnemonic::Mul_R_R:
-					registers[nextInstr->arg1] *= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) *= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mul_R_A:
-					registers[nextInstr->arg1] *= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) *= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Mul_R_I:
-					registers[nextInstr->arg1] *= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) *= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Mul_R_V:
-					registers[nextInstr->arg1] *= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) *= nextInstr->arg2;
 					break;
 				case Mnemonic::Mul_A_R:
-					program[nextInstr->arg1] *= registers[nextInstr->arg2];
+					program[nextInstr->arg1] *= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mul_A_A:
 					program[nextInstr->arg1] *= program[nextInstr->arg2];
@@ -1166,7 +1231,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] *= nextInstr->arg2;
 					break;
 				case Mnemonic::Mul_I_R:
-					program[registers[nextInstr->arg1]] *= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] *= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mul_I_A:
 					program[registers[nextInstr->arg1]] *= program[nextInstr->arg2];
@@ -1178,19 +1243,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] *= nextInstr->arg2;
 					break;
 				case Mnemonic::Div_R_R:
-					registers[nextInstr->arg1] /= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) /= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Div_R_A:
-					registers[nextInstr->arg1] /= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) /= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Div_R_I:
-					registers[nextInstr->arg1] /= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) /= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Div_R_V:
-					registers[nextInstr->arg1] /= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) /= nextInstr->arg2;
 					break;
 				case Mnemonic::Div_A_R:
-					program[nextInstr->arg1] /= registers[nextInstr->arg2];
+					program[nextInstr->arg1] /= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Div_A_A:
 					program[nextInstr->arg1] /= program[nextInstr->arg2];
@@ -1202,7 +1267,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] /= nextInstr->arg2;
 					break;
 				case Mnemonic::Div_I_R:
-					program[registers[nextInstr->arg1]] /= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] /= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Div_I_A:
 					program[registers[nextInstr->arg1]] /= program[nextInstr->arg2];
@@ -1214,19 +1279,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] /= nextInstr->arg2;
 					break;
 				case Mnemonic::Mod_R_R:
-					registers[nextInstr->arg1] %= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) %= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mod_R_A:
-					registers[nextInstr->arg1] %= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) %= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Mod_R_I:
-					registers[nextInstr->arg1] %= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) %= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Mod_R_V:
-					registers[nextInstr->arg1] %= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) %= nextInstr->arg2;
 					break;
 				case Mnemonic::Mod_A_R:
-					program[nextInstr->arg1] %= registers[nextInstr->arg2];
+					program[nextInstr->arg1] %= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mod_A_A:
 					program[nextInstr->arg1] %= program[nextInstr->arg2];
@@ -1238,7 +1303,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] %= nextInstr->arg2;
 					break;
 				case Mnemonic::Mod_I_R:
-					program[registers[nextInstr->arg1]] %= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] %= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Mod_I_A:
 					program[registers[nextInstr->arg1]] %= program[nextInstr->arg2];
@@ -1250,19 +1315,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] %= nextInstr->arg2;
 					break;
 				case Mnemonic::Test_R_R:
-					setControl(registers[nextInstr->arg1], registers[nextInstr->arg2]);
+					setControl(_accessRegister(nextInstr->arg1), _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Test_R_A:
-					setControl(registers[nextInstr->arg1], program[nextInstr->arg2]);
+					setControl(_accessRegister(nextInstr->arg1), program[nextInstr->arg2]);
 					break;
 				case Mnemonic::Test_R_I:
-					setControl(registers[nextInstr->arg1], program[registers[nextInstr->arg2]]);
+					setControl(_accessRegister(nextInstr->arg1), program[registers[nextInstr->arg2]]);
 					break;
 				case Mnemonic::Test_R_V:
-					setControl(registers[nextInstr->arg1], nextInstr->arg2);
+					setControl(_accessRegister(nextInstr->arg1), nextInstr->arg2);
 					break;
 				case Mnemonic::Test_A_R:
-					setControl(program[nextInstr->arg1], registers[nextInstr->arg2]);
+					setControl(program[nextInstr->arg1], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Test_A_A:
 					setControl(program[nextInstr->arg1], program[nextInstr->arg2]);
@@ -1274,7 +1339,7 @@ namespace sbl::vm {
 					setControl(program[nextInstr->arg1], nextInstr->arg2);
 					break;
 				case Mnemonic::Test_I_R:
-					setControl(program[registers[nextInstr->arg1]], registers[nextInstr->arg2]);
+					setControl(program[registers[nextInstr->arg1]], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Test_I_A:
 					setControl(program[registers[nextInstr->arg1]], program[nextInstr->arg2]);
@@ -1286,19 +1351,19 @@ namespace sbl::vm {
 					setControl(program[registers[nextInstr->arg1]], nextInstr->arg2);
 					break;
 				case Mnemonic::Lsh_R_R:
-					registers[nextInstr->arg1] <<= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) <<= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Lsh_R_A:
-					registers[nextInstr->arg1] <<= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) <<= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Lsh_R_I:
-					registers[nextInstr->arg1] <<= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) <<= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Lsh_R_V:
-					registers[nextInstr->arg1] <<= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) <<= nextInstr->arg2;
 					break;
 				case Mnemonic::Lsh_A_R:
-					program[nextInstr->arg1] <<= registers[nextInstr->arg2];
+					program[nextInstr->arg1] <<= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Lsh_A_A:
 					program[nextInstr->arg1] <<= program[nextInstr->arg2];
@@ -1310,7 +1375,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] <<= nextInstr->arg2;
 					break;
 				case Mnemonic::Lsh_I_R:
-					program[registers[nextInstr->arg1]] <<= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] <<= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Lsh_I_A:
 					program[registers[nextInstr->arg1]] <<= program[nextInstr->arg2];
@@ -1322,19 +1387,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] <<= nextInstr->arg2;
 					break;
 				case Mnemonic::Rlsh_R_R:
-					registers[nextInstr->arg1] = _rotl(registers[nextInstr->arg1], registers[nextInstr->arg2]);
+					_accessRegister(nextInstr->arg1) = _rotl(_accessRegister(nextInstr->arg1), _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Rlsh_R_A:
-					registers[nextInstr->arg1] = _rotl(registers[nextInstr->arg1], program[nextInstr->arg2]);
+					_accessRegister(nextInstr->arg1) = _rotl(_accessRegister(nextInstr->arg1), program[nextInstr->arg2]);
 					break;
 				case Mnemonic::Rlsh_R_I:
-					registers[nextInstr->arg1] = _rotl(registers[nextInstr->arg1], program[registers[nextInstr->arg2]]);
+					_accessRegister(nextInstr->arg1) = _rotl(_accessRegister(nextInstr->arg1), program[registers[nextInstr->arg2]]);
 					break;
 				case Mnemonic::Rlsh_R_V:
-					registers[nextInstr->arg1] = _rotl(registers[nextInstr->arg1], nextInstr->arg2);
+					_accessRegister(nextInstr->arg1) = _rotl(_accessRegister(nextInstr->arg1), nextInstr->arg2);
 					break;
 				case Mnemonic::Rlsh_A_R:
-					program[nextInstr->arg1] = _rotl(program[nextInstr->arg1], registers[nextInstr->arg2]);
+					program[nextInstr->arg1] = _rotl(program[nextInstr->arg1], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Rlsh_A_A:
 					program[nextInstr->arg1] = _rotl(program[nextInstr->arg1], program[nextInstr->arg2]);
@@ -1346,7 +1411,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] = _rotl(program[nextInstr->arg1], nextInstr->arg2);
 					break;
 				case Mnemonic::Rlsh_I_R:
-					program[registers[nextInstr->arg1]] = _rotl(program[registers[nextInstr->arg1]], registers[nextInstr->arg2]);
+					program[registers[nextInstr->arg1]] = _rotl(program[registers[nextInstr->arg1]], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Rlsh_I_A:
 					program[registers[nextInstr->arg1]] = _rotl(program[registers[nextInstr->arg1]], program[nextInstr->arg2]);
@@ -1358,19 +1423,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] = _rotl(program[registers[nextInstr->arg1]], nextInstr->arg2);
 					break;
 				case Mnemonic::Rsh_R_R:
-					registers[nextInstr->arg1] >>= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) >>= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Rsh_R_A:
-					registers[nextInstr->arg1] >>= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) >>= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Rsh_R_I:
-					registers[nextInstr->arg1] >>= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) >>= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Rsh_R_V:
-					registers[nextInstr->arg1] >>= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) >>= nextInstr->arg2;
 					break;
 				case Mnemonic::Rsh_A_R:
-					program[nextInstr->arg1] >>= registers[nextInstr->arg2];
+					program[nextInstr->arg1] >>= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Rsh_A_A:
 					program[nextInstr->arg1] >>= program[nextInstr->arg2];
@@ -1382,7 +1447,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] >>= nextInstr->arg2;
 					break;
 				case Mnemonic::Rsh_I_R:
-					program[registers[nextInstr->arg1]] >>= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] >>= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Rsh_I_A:
 					program[registers[nextInstr->arg1]] >>= program[nextInstr->arg2];
@@ -1394,19 +1459,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] >>= nextInstr->arg2;
 					break;
 				case Mnemonic::Rrsh_R_R:
-					registers[nextInstr->arg1] = _rotr(registers[nextInstr->arg1], registers[nextInstr->arg2]);
+					_accessRegister(nextInstr->arg1) = _rotr(_accessRegister(nextInstr->arg1), _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Rrsh_R_A:
-					registers[nextInstr->arg1] = _rotr(registers[nextInstr->arg1], program[nextInstr->arg2]);
+					_accessRegister(nextInstr->arg1) = _rotr(_accessRegister(nextInstr->arg1), program[nextInstr->arg2]);
 					break;
 				case Mnemonic::Rrsh_R_I:
-					registers[nextInstr->arg1] = _rotr(registers[nextInstr->arg1], program[registers[nextInstr->arg2]]);
+					_accessRegister(nextInstr->arg1) = _rotr(_accessRegister(nextInstr->arg1), program[registers[nextInstr->arg2]]);
 					break;
 				case Mnemonic::Rrsh_R_V:
-					registers[nextInstr->arg1] = _rotr(registers[nextInstr->arg1], nextInstr->arg2);
+					_accessRegister(nextInstr->arg1) = _rotr(_accessRegister(nextInstr->arg1), nextInstr->arg2);
 					break;
 				case Mnemonic::Rrsh_A_R:
-					program[nextInstr->arg1] = _rotr(program[nextInstr->arg1], registers[nextInstr->arg2]);
+					program[nextInstr->arg1] = _rotr(program[nextInstr->arg1], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Rrsh_A_A:
 					program[nextInstr->arg1] = _rotr(program[nextInstr->arg1], program[nextInstr->arg2]);
@@ -1418,7 +1483,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] = _rotr(program[nextInstr->arg1], nextInstr->arg2);
 					break;
 				case Mnemonic::Rrsh_I_R:
-					program[registers[nextInstr->arg1]] = _rotr(program[registers[nextInstr->arg1]], registers[nextInstr->arg2]);
+					program[registers[nextInstr->arg1]] = _rotr(program[registers[nextInstr->arg1]], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Rrsh_I_A:
 					program[registers[nextInstr->arg1]] = _rotr(program[registers[nextInstr->arg1]], program[nextInstr->arg2]);
@@ -1430,19 +1495,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] = _rotr(program[registers[nextInstr->arg1]], nextInstr->arg2);
 					break;
 				case Mnemonic::And_R_R:
-					registers[nextInstr->arg1] &= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) &= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::And_R_A:
-					registers[nextInstr->arg1] &= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) &= program[nextInstr->arg2];
 					break;
 				case Mnemonic::And_R_I:
-					registers[nextInstr->arg1] &= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) &= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::And_R_V:
-					registers[nextInstr->arg1] &= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) &= nextInstr->arg2;
 					break;
 				case Mnemonic::And_A_R:
-					program[nextInstr->arg1] &= registers[nextInstr->arg2];
+					program[nextInstr->arg1] &= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::And_A_A:
 					program[nextInstr->arg1] &= program[nextInstr->arg2];
@@ -1454,7 +1519,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] &= nextInstr->arg2;
 					break;
 				case Mnemonic::And_I_R:
-					program[registers[nextInstr->arg1]] &= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] &= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::And_I_A:
 					program[registers[nextInstr->arg1]] &= program[nextInstr->arg2];
@@ -1466,19 +1531,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] &= nextInstr->arg2;
 					break;
 				case Mnemonic::Or_R_R:
-					registers[nextInstr->arg1] |= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) |= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Or_R_A:
-					registers[nextInstr->arg1] |= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) |= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Or_R_I:
-					registers[nextInstr->arg1] |= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) |= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Or_R_V:
-					registers[nextInstr->arg1] |= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) |= nextInstr->arg2;
 					break;
 				case Mnemonic::Or_A_R:
-					program[nextInstr->arg1] |= registers[nextInstr->arg2];
+					program[nextInstr->arg1] |= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Or_A_A:
 					program[nextInstr->arg1] |= program[nextInstr->arg2];
@@ -1490,7 +1555,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] |= nextInstr->arg2;
 					break;
 				case Mnemonic::Or_I_R:
-					program[registers[nextInstr->arg1]] |= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] |= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Or_I_A:
 					program[registers[nextInstr->arg1]] |= program[nextInstr->arg2];
@@ -1502,19 +1567,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] |= nextInstr->arg2;
 					break;
 				case Mnemonic::Xor_R_R:
-					registers[nextInstr->arg1] ^= registers[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) ^= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Xor_R_A:
-					registers[nextInstr->arg1] ^= program[nextInstr->arg2];
+					_accessRegister(nextInstr->arg1) ^= program[nextInstr->arg2];
 					break;
 				case Mnemonic::Xor_R_I:
-					registers[nextInstr->arg1] ^= program[registers[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) ^= program[registers[nextInstr->arg2]];
 					break;
 				case Mnemonic::Xor_R_V:
-					registers[nextInstr->arg1] ^= nextInstr->arg2;
+					_accessRegister(nextInstr->arg1) ^= nextInstr->arg2;
 					break;
 				case Mnemonic::Xor_A_R:
-					program[nextInstr->arg1] ^= registers[nextInstr->arg2];
+					program[nextInstr->arg1] ^= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Xor_A_A:
 					program[nextInstr->arg1] ^= program[nextInstr->arg2];
@@ -1526,7 +1591,7 @@ namespace sbl::vm {
 					program[nextInstr->arg1] ^= nextInstr->arg2;
 					break;
 				case Mnemonic::Xor_I_R:
-					program[registers[nextInstr->arg1]] ^= registers[nextInstr->arg2];
+					program[registers[nextInstr->arg1]] ^= _accessRegister(nextInstr->arg2);
 					break;
 				case Mnemonic::Xor_I_A:
 					program[registers[nextInstr->arg1]] ^= program[nextInstr->arg2];
@@ -1538,19 +1603,19 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] ^= nextInstr->arg2;
 					break;
 				case Mnemonic::Eq_R_R:
-					setControl(registers[nextInstr->arg1] == registers[nextInstr->arg2], TestEqual | TestBiggerEqual | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) == _accessRegister(nextInstr->arg2), TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Eq_R_A:
-					setControl(registers[nextInstr->arg1] == program[nextInstr->arg2], TestEqual | TestBiggerEqual | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) == program[nextInstr->arg2], TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Eq_R_I:
-					setControl(registers[nextInstr->arg1] == program[registers[nextInstr->arg2]], TestEqual | TestBiggerEqual | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) == program[registers[nextInstr->arg2]], TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Eq_R_V:
-					setControl(registers[nextInstr->arg1] == nextInstr->arg2, TestEqual | TestBiggerEqual | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) == nextInstr->arg2, TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Eq_A_R:
-					setControl(program[nextInstr->arg1] == registers[nextInstr->arg2], TestEqual | TestBiggerEqual | TestSmallerEqual);
+					setControl(program[nextInstr->arg1] == _accessRegister(nextInstr->arg2), TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Eq_A_A:
 					setControl(program[nextInstr->arg1] == program[nextInstr->arg2], TestEqual | TestBiggerEqual | TestSmallerEqual);
@@ -1562,7 +1627,7 @@ namespace sbl::vm {
 					setControl(program[nextInstr->arg1] == nextInstr->arg2, TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Eq_I_R:
-					setControl(program[registers[nextInstr->arg1]] == registers[nextInstr->arg2], TestEqual | TestBiggerEqual | TestSmallerEqual);
+					setControl(program[registers[nextInstr->arg1]] == _accessRegister(nextInstr->arg2), TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Eq_I_A:
 					setControl(program[registers[nextInstr->arg1]] == program[nextInstr->arg2], TestEqual | TestBiggerEqual | TestSmallerEqual);
@@ -1574,19 +1639,19 @@ namespace sbl::vm {
 					setControl(program[registers[nextInstr->arg1]] == nextInstr->arg2, TestEqual | TestBiggerEqual | TestSmallerEqual);
 					break;
 				case Mnemonic::Neq_R_R:
-					setControl(registers[nextInstr->arg1] != registers[nextInstr->arg2], TestUnequal);
+					setControl(_accessRegister(nextInstr->arg1) != _accessRegister(nextInstr->arg2), TestUnequal);
 					break;
 				case Mnemonic::Neq_R_A:
-					setControl(registers[nextInstr->arg1] != program[nextInstr->arg2], TestUnequal);
+					setControl(_accessRegister(nextInstr->arg1) != program[nextInstr->arg2], TestUnequal);
 					break;
 				case Mnemonic::Neq_R_I:
-					setControl(registers[nextInstr->arg1] != program[registers[nextInstr->arg2]], TestUnequal);
+					setControl(_accessRegister(nextInstr->arg1) != program[registers[nextInstr->arg2]], TestUnequal);
 					break;
 				case Mnemonic::Neq_R_V:
-					setControl(registers[nextInstr->arg1] != nextInstr->arg2, TestUnequal);
+					setControl(_accessRegister(nextInstr->arg1) != nextInstr->arg2, TestUnequal);
 					break;
 				case Mnemonic::Neq_A_R:
-					setControl(program[nextInstr->arg1] != registers[nextInstr->arg2], TestUnequal);
+					setControl(program[nextInstr->arg1] != _accessRegister(nextInstr->arg2), TestUnequal);
 					break;
 				case Mnemonic::Neq_A_A:
 					setControl(program[nextInstr->arg1] != program[nextInstr->arg2], TestUnequal);
@@ -1598,7 +1663,7 @@ namespace sbl::vm {
 					setControl(program[nextInstr->arg1] != nextInstr->arg2, TestUnequal);
 					break;
 				case Mnemonic::Neq_I_R:
-					setControl(program[registers[nextInstr->arg1]] != registers[nextInstr->arg2], TestUnequal);
+					setControl(program[registers[nextInstr->arg1]] != _accessRegister(nextInstr->arg2), TestUnequal);
 					break;
 				case Mnemonic::Neq_I_A:
 					setControl(program[registers[nextInstr->arg1]] != program[nextInstr->arg2], TestUnequal);
@@ -1610,19 +1675,19 @@ namespace sbl::vm {
 					setControl(program[registers[nextInstr->arg1]] != nextInstr->arg2, TestUnequal);
 					break;
 				case Mnemonic::Lt_R_R:
-					setControl(registers[nextInstr->arg1] < registers[nextInstr->arg2], TestSmaller | TestUnequal | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) < _accessRegister(nextInstr->arg2), TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Lt_R_A:
-					setControl(registers[nextInstr->arg1] < program[nextInstr->arg2], TestSmaller | TestUnequal | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) < program[nextInstr->arg2], TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Lt_R_I:
-					setControl(registers[nextInstr->arg1] < program[registers[nextInstr->arg2]], TestSmaller | TestUnequal | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) < program[registers[nextInstr->arg2]], TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Lt_R_V:
-					setControl(registers[nextInstr->arg1] < nextInstr->arg2, TestSmaller | TestUnequal | TestSmallerEqual);
+					setControl(_accessRegister(nextInstr->arg1) < nextInstr->arg2, TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Lt_A_R:
-					setControl(program[nextInstr->arg1] < registers[nextInstr->arg2], TestSmaller | TestUnequal | TestSmallerEqual);
+					setControl(program[nextInstr->arg1] < _accessRegister(nextInstr->arg2), TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Lt_A_A:
 					setControl(program[nextInstr->arg1] < program[nextInstr->arg2], TestSmaller | TestUnequal | TestSmallerEqual);
@@ -1634,7 +1699,7 @@ namespace sbl::vm {
 					setControl(program[nextInstr->arg1] < nextInstr->arg2, TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Lt_I_R:
-					setControl(program[registers[nextInstr->arg1]] < registers[nextInstr->arg2], TestSmaller | TestUnequal | TestSmallerEqual);
+					setControl(program[registers[nextInstr->arg1]] < _accessRegister(nextInstr->arg2), TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Lt_I_A:
 					setControl(program[registers[nextInstr->arg1]] < program[nextInstr->arg2], TestSmaller | TestUnequal | TestSmallerEqual);
@@ -1646,19 +1711,19 @@ namespace sbl::vm {
 					setControl(program[registers[nextInstr->arg1]] < nextInstr->arg2, TestSmaller | TestUnequal | TestSmallerEqual);
 					break;
 				case Mnemonic::Bt_R_R:
-					setControl(registers[nextInstr->arg1] > registers[nextInstr->arg2], TestBigger | TestUnequal | TestBiggerEqual);
+					setControl(_accessRegister(nextInstr->arg1) > _accessRegister(nextInstr->arg2), TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 				case Mnemonic::Bt_R_A:
-					setControl(registers[nextInstr->arg1] > program[nextInstr->arg2], TestBigger | TestUnequal | TestBiggerEqual);
+					setControl(_accessRegister(nextInstr->arg1) > program[nextInstr->arg2], TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 				case Mnemonic::Bt_R_I:
-					setControl(registers[nextInstr->arg1] > program[registers[nextInstr->arg2]], TestBigger | TestUnequal | TestBiggerEqual);
+					setControl(_accessRegister(nextInstr->arg1) > program[registers[nextInstr->arg2]], TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 				case Mnemonic::Bt_R_V:
-					setControl(registers[nextInstr->arg1] > nextInstr->arg2, TestBigger | TestUnequal | TestBiggerEqual);
+					setControl(_accessRegister(nextInstr->arg1) > nextInstr->arg2, TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 				case Mnemonic::Bt_A_R:
-					setControl(program[nextInstr->arg1] > registers[nextInstr->arg2], TestBigger | TestUnequal | TestBiggerEqual);
+					setControl(program[nextInstr->arg1] > _accessRegister(nextInstr->arg2), TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 				case Mnemonic::Bt_A_A:
 					setControl(program[nextInstr->arg1] > program[nextInstr->arg2], TestBigger | TestUnequal | TestBiggerEqual);
@@ -1670,7 +1735,7 @@ namespace sbl::vm {
 					setControl(program[nextInstr->arg1] > nextInstr->arg2, TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 				case Mnemonic::Bt_I_R:
-					setControl(program[registers[nextInstr->arg1]] > registers[nextInstr->arg2], TestBigger | TestUnequal | TestBiggerEqual);
+					setControl(program[registers[nextInstr->arg1]] > _accessRegister(nextInstr->arg2), TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 				case Mnemonic::Bt_I_A:
 					setControl(program[registers[nextInstr->arg1]] > program[nextInstr->arg2], TestBigger | TestUnequal | TestBiggerEqual);
@@ -1682,7 +1747,6 @@ namespace sbl::vm {
 					setControl(program[registers[nextInstr->arg1]] > nextInstr->arg2, TestBigger | TestUnequal | TestBiggerEqual);
 					break;
 
-				//UNHANDLED = INVALID INSTRUCTION
 				default:
 					return _perform2(nextInstr);
 			}
@@ -1693,10 +1757,10 @@ namespace sbl::vm {
 		bool _perform2(Instruction* nextInstr) {
 			switch (nextInstr->mnemonic) {
 				case Mnemonic::Loadload_R_A:
-					registers[nextInstr->arg1] = program[program[nextInstr->arg2]];
+					_accessRegister(nextInstr->arg1) = program[program[nextInstr->arg2]];
 					break;
 				case Mnemonic::Loadload_R_I:
-					registers[nextInstr->arg1] = program[program[registers[nextInstr->arg2]]];
+					_accessRegister(nextInstr->arg1) = program[program[registers[nextInstr->arg2]]];
 					break;
 				case Mnemonic::Loadload_A_A:
 					program[nextInstr->arg1] = program[program[nextInstr->arg2]];
@@ -1710,17 +1774,81 @@ namespace sbl::vm {
 				case Mnemonic::Loadload_I_I:
 					program[registers[nextInstr->arg1]] = program[program[registers[nextInstr->arg2]]];
 					break;
+				case Mnemonic::Vcall_R_R:
+					_pushStack(instrPtr);
+					instrPtr = program[_accessRegister(nextInstr->arg1) + _accessRegister(nextInstr->arg2)];
+					break;
+				case Mnemonic::Vcall_R_A:
+					_pushStack(instrPtr);
+					instrPtr = program[_accessRegister(nextInstr->arg1) + program[nextInstr->arg2]];
+					break;
+				case Mnemonic::Vcall_R_I:
+					_pushStack(instrPtr);
+					instrPtr = program[_accessRegister(nextInstr->arg1) + program[registers[nextInstr->arg2]]];
+					break;
+				case Mnemonic::Vcall_R_V:
+					_pushStack(instrPtr);
+					instrPtr = program[_accessRegister(nextInstr->arg1) + nextInstr->arg2];
+					break;
+				case Mnemonic::Vcall_A_R:
+					_pushStack(instrPtr);
+					instrPtr = program[program[nextInstr->arg1] + _accessRegister(nextInstr->arg2)];
+					break;
+				case Mnemonic::Vcall_A_A:
+					_pushStack(instrPtr);
+					instrPtr = program[program[nextInstr->arg1] + program[nextInstr->arg2]];
+					break;
+				case Mnemonic::Vcall_A_I:
+					_pushStack(instrPtr);
+					instrPtr = program[program[nextInstr->arg1] + program[registers[nextInstr->arg2]]];
+					break;
+				case Mnemonic::Vcall_A_V:
+					_pushStack(instrPtr);
+					instrPtr = program[program[nextInstr->arg1] + nextInstr->arg2];
+					break;
+				case Mnemonic::Vcall_I_R:
+					_pushStack(instrPtr);
+					instrPtr = program[program[registers[nextInstr->arg1]] + _accessRegister(nextInstr->arg2)];
+					break;
+				case Mnemonic::Vcall_I_A:
+					_pushStack(instrPtr);
+					instrPtr = program[program[registers[nextInstr->arg1]] + program[nextInstr->arg2]];
+					break;
+				case Mnemonic::Vcall_I_I:
+					_pushStack(instrPtr);
+					instrPtr = program[program[registers[nextInstr->arg1]] + program[registers[nextInstr->arg2]]];
+					break;
+				case Mnemonic::Vcall_I_V:
+					_pushStack(instrPtr);
+					instrPtr = program[program[registers[nextInstr->arg1]] + nextInstr->arg2];
+					break;
+				case Mnemonic::Vcall_V_R:
+					_pushStack(instrPtr);
+					instrPtr = program[nextInstr->arg1 + _accessRegister(nextInstr->arg2)];
+					break;
+				case Mnemonic::Vcall_V_A:
+					_pushStack(instrPtr);
+					instrPtr = program[nextInstr->arg1 + program[nextInstr->arg2]];
+					break;
+				case Mnemonic::Vcall_V_I:
+					_pushStack(instrPtr);
+					instrPtr = program[nextInstr->arg1 + program[registers[nextInstr->arg2]]];
+					break;
+				case Mnemonic::Vcall_V_V:
+					_pushStack(instrPtr);
+					instrPtr = program[nextInstr->arg1 + nextInstr->arg2];
+					break;
 				case Mnemonic::RegInt_R_R:
-					_setInterruptHandler(registers[nextInstr->arg1], registers[nextInstr->arg2]);
+					_setInterruptHandler(_accessRegister(nextInstr->arg1), _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Regint_R_I:
-					_setInterruptHandler(registers[nextInstr->arg1], program[registers[nextInstr->arg2]]);
+					_setInterruptHandler(_accessRegister(nextInstr->arg1), program[registers[nextInstr->arg2]]);
 					break;
 				case Mnemonic::Regint_R_A:
-					_setInterruptHandler(registers[nextInstr->arg1], nextInstr->arg2);
+					_setInterruptHandler(_accessRegister(nextInstr->arg1), nextInstr->arg2);
 					break;
 				case Mnemonic::RegInt_A_R:
-					_setInterruptHandler(program[nextInstr->arg1], registers[nextInstr->arg2]);
+					_setInterruptHandler(program[nextInstr->arg1], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Regint_A_I:
 					_setInterruptHandler(program[nextInstr->arg1], program[registers[nextInstr->arg2]]);
@@ -1729,7 +1857,7 @@ namespace sbl::vm {
 					_setInterruptHandler(program[nextInstr->arg1], nextInstr->arg2);
 					break;
 				case Mnemonic::RegInt_I_R:
-					_setInterruptHandler(program[registers[nextInstr->arg1]], registers[nextInstr->arg2]);
+					_setInterruptHandler(program[registers[nextInstr->arg1]], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Regint_I_I:
 					_setInterruptHandler(program[registers[nextInstr->arg1]], program[registers[nextInstr->arg2]]);
@@ -1738,7 +1866,7 @@ namespace sbl::vm {
 					_setInterruptHandler(program[registers[nextInstr->arg1]], nextInstr->arg2);
 					break;
 				case Mnemonic::RegInt_V_R:
-					_setInterruptHandler(nextInstr->arg1, registers[nextInstr->arg2]);
+					_setInterruptHandler(nextInstr->arg1, _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Regint_V_I:
 					_setInterruptHandler(nextInstr->arg1, program[registers[nextInstr->arg2]]);
@@ -1747,16 +1875,16 @@ namespace sbl::vm {
 					_setInterruptHandler(nextInstr->arg1, nextInstr->arg2);
 					break;
 				case Mnemonic::RRegInt_R_R:
-					_setInterruptHandler(registers[nextInstr->arg1], instrPtr + registers[nextInstr->arg2]);
+					_setInterruptHandler(_accessRegister(nextInstr->arg1), instrPtr + _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::RRegInt_R_I:
-					_setInterruptHandler(registers[nextInstr->arg1], instrPtr + program[registers[nextInstr->arg2]]);
+					_setInterruptHandler(_accessRegister(nextInstr->arg1), instrPtr + program[registers[nextInstr->arg2]]);
 					break;
 				case Mnemonic::RRegInt_R_A:
-					_setInterruptHandler(registers[nextInstr->arg1], instrPtr + nextInstr->arg2);
+					_setInterruptHandler(_accessRegister(nextInstr->arg1), instrPtr + nextInstr->arg2);
 					break;
 				case Mnemonic::RRegInt_A_R:
-					_setInterruptHandler(program[nextInstr->arg1], instrPtr + registers[nextInstr->arg2]);
+					_setInterruptHandler(program[nextInstr->arg1], instrPtr + _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::RRegInt_A_I:
 					_setInterruptHandler(program[nextInstr->arg1], instrPtr + program[registers[nextInstr->arg2]]);
@@ -1765,7 +1893,7 @@ namespace sbl::vm {
 					_setInterruptHandler(program[nextInstr->arg1], instrPtr + nextInstr->arg2);
 					break;
 				case Mnemonic::RRegInt_I_R:
-					_setInterruptHandler(program[registers[nextInstr->arg1]], instrPtr + registers[nextInstr->arg2]);
+					_setInterruptHandler(program[registers[nextInstr->arg1]], instrPtr + _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::RRegInt_I_I:
 					_setInterruptHandler(program[registers[nextInstr->arg1]], instrPtr + program[registers[nextInstr->arg2]]);
@@ -1774,7 +1902,7 @@ namespace sbl::vm {
 					_setInterruptHandler(program[registers[nextInstr->arg1]], instrPtr + nextInstr->arg2);
 					break;
 				case Mnemonic::RRegInt_V_R:
-					_setInterruptHandler(nextInstr->arg1, instrPtr + registers[nextInstr->arg2]);
+					_setInterruptHandler(nextInstr->arg1, instrPtr + _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::RRegInt_V_I:
 					_setInterruptHandler(nextInstr->arg1, instrPtr + program[registers[nextInstr->arg2]]);
@@ -1789,7 +1917,7 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] = static_cast<uint32_t>(getTime(startExecTime));
 					break;
 				case Mnemonic::Time64_R:
-					_writeTime(getTime(startExecTime), &registers[nextInstr->arg1]);
+					_writeTime(getTime(startExecTime), &_accessRegister(nextInstr->arg1));
 					break;
 				case Mnemonic::Time64_A:
 					_writeTime(getTime(startExecTime), &program[nextInstr->arg1]);
@@ -1804,7 +1932,7 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] = static_cast<uint32_t>(instrCount);
 					break;
 				case Mnemonic::ICount64_R:
-					_writeTime(instrCount, &registers[nextInstr->arg1]);
+					_writeTime(instrCount, &_accessRegister(nextInstr->arg1));
 					break;
 				case Mnemonic::ICount64_A:
 					_writeTime(instrCount, &program[nextInstr->arg1]);
@@ -1813,7 +1941,7 @@ namespace sbl::vm {
 					_writeTime(instrCount, &program[registers[nextInstr->arg1]]);
 					break;
 				case Mnemonic::NtvCall_R:
-					_doNativeCall(registers[nextInstr->arg1]);
+					_doNativeCall(_accessRegister(nextInstr->arg1));
 					break;
 				case Mnemonic::NtvCall_A:
 					_doNativeCall(program[nextInstr->arg1]);
@@ -1823,12 +1951,6 @@ namespace sbl::vm {
 					break;
 				case Mnemonic::NtvCall_V:
 					_doNativeCall(nextInstr->arg1);
-					break;
-				case Mnemonic::RICountInt_R:
-					nextInstrCountInterrupt = instrCount + registers[nextInstr->arg1];
-					break;
-				case Mnemonic::RICountInt_V:
-					nextInstrCountInterrupt = instrCount + nextInstr->arg1;
 					break;
 				case Mnemonic::Push_All:
 					for (size_t i = 0, j = registers.size(); i < j; ++i) {
@@ -1846,10 +1968,10 @@ namespace sbl::vm {
 					}
 					break;
 				case Mnemonic::GetNtvId_R_A:
-					registers[nextInstr->arg1] = _findNativeByName(reinterpret_cast<char*>(&program[nextInstr->arg2]));
+					_accessRegister(nextInstr->arg1) = _findNativeByName(reinterpret_cast<char*>(&program[nextInstr->arg2]));
 					break;
 				case Mnemonic::GetNtvId_R_I:
-					registers[nextInstr->arg1] = _findNativeByName(reinterpret_cast<char*>(&program[registers[nextInstr->arg2]]));
+					_accessRegister(nextInstr->arg1) = _findNativeByName(reinterpret_cast<char*>(&program[registers[nextInstr->arg2]]));
 					break;
 				case Mnemonic::GetNtvId_A_A:
 					program[nextInstr->arg1] = _findNativeByName(reinterpret_cast<char*>(&program[nextInstr->arg2]));
@@ -1864,16 +1986,16 @@ namespace sbl::vm {
 					program[registers[nextInstr->arg1]] = _findNativeByName(reinterpret_cast<char*>(&program[registers[nextInstr->arg2]]));
 					break;
 				case Mnemonic::Xchg_R_R:
-					std::swap(registers[nextInstr->arg1], registers[nextInstr->arg2]);
+					std::swap(_accessRegister(nextInstr->arg1), _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Xchg_R_A:
-					std::swap(registers[nextInstr->arg1], program[nextInstr->arg2]);
+					std::swap(_accessRegister(nextInstr->arg1), program[nextInstr->arg2]);
 					break;
 				case Mnemonic::Xchg_R_I:
-					std::swap(registers[nextInstr->arg1], program[registers[nextInstr->arg2]]);
+					std::swap(_accessRegister(nextInstr->arg1), program[registers[nextInstr->arg2]]);
 					break;
 				case Mnemonic::Xchg_A_R:
-					std::swap(program[nextInstr->arg1], registers[nextInstr->arg2]);
+					std::swap(program[nextInstr->arg1], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Xchg_A_A:
 					std::swap(program[nextInstr->arg1], program[nextInstr->arg2]);
@@ -1882,7 +2004,7 @@ namespace sbl::vm {
 					std::swap(program[nextInstr->arg1], program[registers[nextInstr->arg2]]);
 					break;
 				case Mnemonic::Xchg_I_R:
-					std::swap(program[registers[nextInstr->arg1]], registers[nextInstr->arg2]);
+					std::swap(program[registers[nextInstr->arg1]], _accessRegister(nextInstr->arg2));
 					break;
 				case Mnemonic::Xchg_I_A:
 					std::swap(program[registers[nextInstr->arg1]], program[nextInstr->arg2]);
@@ -1892,19 +2014,19 @@ namespace sbl::vm {
 					break;
 				case Mnemonic::DisableAllInts:
 					interruptsRestore = interrupts;
-					for (auto& x : interrupts)  x.first = false;
+					for (auto& x : interrupts)  x.enabled = false;
 					break;
 				case Mnemonic::RestoreInts:
 					interrupts = interruptsRestore;
 					break;
 				case Mnemonic::EnableAllInts:
-					for (auto& x : interrupts)  x.first = true;
+					for (auto& x : interrupts)  x.enabled = true;
 					break;
 				case Mnemonic::ClrCb:
 					controlByte = 0;
 					break;
 				case Mnemonic::ICountInt64_R:
-					_setNextInstrCountInt(registers[nextInstr->arg1], *(&registers[nextInstr->arg1] + 1));
+					_setNextInstrCountInt(_accessRegister(nextInstr->arg1), *(&_accessRegister(nextInstr->arg1) + 1));
 					break;
 				case Mnemonic::ICountInt64_A:
 					_setNextInstrCountInt(program[nextInstr->arg1], *(&program[nextInstr->arg1] + 1));
@@ -1913,7 +2035,7 @@ namespace sbl::vm {
 					_setNextInstrCountInt(program[registers[nextInstr->arg1]], *(&program[registers[nextInstr->arg1]] + 1));
 					break;
 				case Mnemonic::RICountInt64_R:
-					_setNextInstrCountInt(nextInstrCountInterrupt, registers[nextInstr->arg1], *(&registers[nextInstr->arg1] + 1));
+					_setNextInstrCountInt(nextInstrCountInterrupt, _accessRegister(nextInstr->arg1), *(&_accessRegister(nextInstr->arg1) + 1));
 					break;
 				case Mnemonic::RICountInt64_A:
 					_setNextInstrCountInt(nextInstrCountInterrupt, program[nextInstr->arg1], *(&program[nextInstr->arg1] + 1));
@@ -1921,19 +2043,875 @@ namespace sbl::vm {
 				case Mnemonic::RICountInt64_I:
 					_setNextInstrCountInt(nextInstrCountInterrupt, program[registers[nextInstr->arg1]], *(&program[registers[nextInstr->arg1]] + 1));
 					break;
-
-				//UNHANDLED = INVALID INSTRUCTION
-				default:
-					_onInvalidDecode();
+				case Mnemonic::GetPrivlg_R:
+					_accessRegister(nextInstr->arg1) = privilegeLevel;
 					break;
+				case Mnemonic::GetPrivlg_A:
+					program[nextInstr->arg1] = privilegeLevel;
+					break;
+				case Mnemonic::GetPrivlg_I:
+					program[registers[nextInstr->arg1]] = privilegeLevel;
+					break;
+				case Mnemonic::SetInstrPrivlg_R_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					instrPrivileges[_accessRegister(nextInstr->arg1)] = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetInstrPrivlg_R_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					instrPrivileges[_accessRegister(nextInstr->arg1)] = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetInstrPrivlg_R_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					instrPrivileges[_accessRegister(nextInstr->arg1)] = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetInstrPrivlg_R_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					instrPrivileges[_accessRegister(nextInstr->arg1)] = nextInstr->arg2;
+					break;
+				case Mnemonic::SetInstrPrivlg_A_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					instrPrivileges[program[nextInstr->arg1]] = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetInstrPrivlg_A_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					instrPrivileges[program[nextInstr->arg1]] = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetInstrPrivlg_A_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					instrPrivileges[program[nextInstr->arg1]] = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetInstrPrivlg_A_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					instrPrivileges[program[nextInstr->arg1]] = nextInstr->arg2;
+					break;
+				case Mnemonic::SetInstrPrivlg_I_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					instrPrivileges[program[registers[nextInstr->arg1]]] = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetInstrPrivlg_I_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					instrPrivileges[program[registers[nextInstr->arg1]]] = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetInstrPrivlg_I_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					instrPrivileges[program[registers[nextInstr->arg1]]] = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetInstrPrivlg_I_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					instrPrivileges[program[registers[nextInstr->arg1]]] = nextInstr->arg2;
+					break;
+				case Mnemonic::SetInstrPrivlg_V_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					instrPrivileges[nextInstr->arg1] = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetInstrPrivlg_V_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					instrPrivileges[nextInstr->arg1] = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetInstrPrivlg_V_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					instrPrivileges[nextInstr->arg1] = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetInstrPrivlg_V_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					instrPrivileges[nextInstr->arg1] = nextInstr->arg2;
+					break;
+				case Mnemonic::SetPrivlg_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg1))))
+						return false;
+					privilegeLevel = _accessRegister(nextInstr->arg1);
+					break;
+				case Mnemonic::SetPrivlg_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg1])))
+						return false;
+					privilegeLevel = program[nextInstr->arg1];
+					break;
+				case Mnemonic::SetPrivlg_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg1]])))
+						return false;
+					privilegeLevel = program[registers[nextInstr->arg1]];
+					break;
+				case Mnemonic::SetPrivlg_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg1)))
+						return false;
+					privilegeLevel = nextInstr->arg1;
+					break;
+				case Mnemonic::GetInstrPrivlg_R_R:
+					if (_accessRegister(nextInstr->arg2) >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					_accessRegister(nextInstr->arg1) = instrPrivileges[_accessRegister(nextInstr->arg2)];
+					break;
+				case Mnemonic::GetInstrPrivlg_R_A:
+					if (program[nextInstr->arg2] >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					_accessRegister(nextInstr->arg1) = instrPrivileges[program[nextInstr->arg2]];
+					break;
+				case Mnemonic::GetInstrPrivlg_R_I:
+					if (program[registers[nextInstr->arg2]] >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					_accessRegister(nextInstr->arg1) = instrPrivileges[program[registers[nextInstr->arg2]]];
+					break;
+				case Mnemonic::GetInstrPrivlg_R_V:
+					if (nextInstr->arg2 >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					_accessRegister(nextInstr->arg1) = instrPrivileges[nextInstr->arg2];
+					break;
+				case Mnemonic::GetInstrPrivlg_A_R:
+					if (_accessRegister(nextInstr->arg2) >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[nextInstr->arg1] = instrPrivileges[_accessRegister(nextInstr->arg2)];
+					break;
+				case Mnemonic::GetInstrPrivlg_A_A:
+					if (program[nextInstr->arg2] >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[nextInstr->arg1] = instrPrivileges[program[nextInstr->arg2]];
+					break;
+				case Mnemonic::GetInstrPrivlg_A_I:
+					if (program[registers[nextInstr->arg2]] >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[nextInstr->arg1] = instrPrivileges[program[registers[nextInstr->arg2]]];
+					break;
+				case Mnemonic::GetInstrPrivlg_A_V:
+					if (nextInstr->arg2 >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[nextInstr->arg1] = instrPrivileges[nextInstr->arg2];
+					break;
+				case Mnemonic::GetInstrPrivlg_I_R:
+					if (_accessRegister(nextInstr->arg2) >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[registers[nextInstr->arg1]] = instrPrivileges[_accessRegister(nextInstr->arg2)];
+					break;
+				case Mnemonic::GetInstrPrivlg_I_A:
+					if (program[nextInstr->arg2] >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[registers[nextInstr->arg1]] = instrPrivileges[program[nextInstr->arg2]];
+					break;
+				case Mnemonic::GetInstrPrivlg_I_I:
+					if (program[registers[nextInstr->arg2]] >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[registers[nextInstr->arg1]] = instrPrivileges[program[registers[nextInstr->arg2]]];
+					break;
+				case Mnemonic::GetInstrPrivlg_I_V:
+					if (nextInstr->arg2 >= Mnemonic::TotalCount) {
+						error = { ErrorCode::InvalidInstruction, instrPtr };
+						running = false;
+						return false;
+					}
+					program[registers[nextInstr->arg1]] = instrPrivileges[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntPrivlg_R_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntPrivlg_R_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntPrivlg_R_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntPrivlg_R_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::SetIntPrivlg_A_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntPrivlg_A_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntPrivlg_A_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntPrivlg_A_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::SetIntPrivlg_I_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntPrivlg_I_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntPrivlg_I_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntPrivlg_I_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::SetIntPrivlg_V_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntPrivlg_V_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntPrivlg_V_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntPrivlg_V_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::GetIntPrivlg_R_R:
+					_accessRegister(nextInstr->arg1) = interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_R_A:
+					_accessRegister(nextInstr->arg1) = interrupts[static_cast<uint8_t>(program[nextInstr->arg2])].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_R_I:
+					_accessRegister(nextInstr->arg1) = interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_R_V:
+					_accessRegister(nextInstr->arg1) = interrupts[static_cast<uint8_t>(nextInstr->arg2)].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_A_R:
+					program[nextInstr->arg1] = interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_A_A:
+					program[nextInstr->arg1] = interrupts[static_cast<uint8_t>(program[nextInstr->arg2])].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_A_I:
+					program[nextInstr->arg1] = interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_A_V:
+					program[nextInstr->arg1] = interrupts[static_cast<uint8_t>(nextInstr->arg2)].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_I_R:
+					program[registers[nextInstr->arg1]] = interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_I_A:
+					program[registers[nextInstr->arg1]] = interrupts[static_cast<uint8_t>(program[nextInstr->arg2])].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_I_I:
+					program[registers[nextInstr->arg1]] = interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].privilege;
+					break;
+				case Mnemonic::GetIntPrivlg_I_V:
+					program[registers[nextInstr->arg1]] = interrupts[static_cast<uint8_t>(nextInstr->arg2)].privilege;
+					break;
+				case Mnemonic::SetIntExecPrivlg_R_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilegeRequired = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntExecPrivlg_R_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilegeRequired = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntExecPrivlg_R_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilegeRequired = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntExecPrivlg_R_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilegeRequired = nextInstr->arg2;
+					break;
+				case Mnemonic::SetIntExecPrivlg_A_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilegeRequired = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntExecPrivlg_A_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilegeRequired = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntExecPrivlg_A_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilegeRequired = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntExecPrivlg_A_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(program[nextInstr->arg1])].privilegeRequired = nextInstr->arg2;
+					break;
+				case Mnemonic::SetIntExecPrivlg_I_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilegeRequired = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntExecPrivlg_I_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilegeRequired = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntExecPrivlg_I_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilegeRequired = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntExecPrivlg_I_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilegeRequired = nextInstr->arg2;
+					break;
+				case Mnemonic::SetIntExecPrivlg_V_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilegeRequired = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetIntExecPrivlg_V_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilegeRequired = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetIntExecPrivlg_V_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilegeRequired = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetIntExecPrivlg_V_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					interrupts[static_cast<uint8_t>(nextInstr->arg1)].privilegeRequired = nextInstr->arg2;
+					break;
+				case Mnemonic::SetExtPrivlg_R_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetExtPrivlg_R_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetExtPrivlg_R_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetExtPrivlg_R_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::SetExtPrivlg_A_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					extensionData[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetExtPrivlg_A_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					extensionData[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetExtPrivlg_A_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					extensionData[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetExtPrivlg_A_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					extensionData[static_cast<uint8_t>(program[nextInstr->arg1])].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::SetExtPrivlg_I_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetExtPrivlg_I_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetExtPrivlg_I_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetExtPrivlg_I_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::SetExtPrivlg_V_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					extensionData[static_cast<uint8_t>(nextInstr->arg1)].privilege = _accessRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::SetExtPrivlg_V_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					extensionData[static_cast<uint8_t>(nextInstr->arg1)].privilege = program[nextInstr->arg2];
+					break;
+				case Mnemonic::SetExtPrivlg_V_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					extensionData[static_cast<uint8_t>(nextInstr->arg1)].privilege = program[registers[nextInstr->arg2]];
+					break;
+				case Mnemonic::SetExtPrivlg_V_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					extensionData[static_cast<uint8_t>(nextInstr->arg1)].privilege = nextInstr->arg2;
+					break;
+				case Mnemonic::GetExtPrivlg_R_R:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_R_A:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(program[nextInstr->arg2])].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_R_I:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_R_V:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(nextInstr->arg2)].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_A_R:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_A_A:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(program[nextInstr->arg2])].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_A_I:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_A_V:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(nextInstr->arg2)].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_I_R:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_I_A:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(program[nextInstr->arg2])].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_I_I:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].privilege;
+					break;
+				case Mnemonic::GetExtPrivlg_I_V:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(nextInstr->arg2)].privilege;
+					break;
+				case Mnemonic::PCall_R_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					++callDepth;
+					return _executeFunc(_accessRegister(nextInstr->arg1), _accessRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::PCall_R_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					++callDepth;
+					return _executeFunc(_accessRegister(nextInstr->arg1), program[nextInstr->arg2]);
+					break;
+				case Mnemonic::PCall_R_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					++callDepth;
+					return _executeFunc(_accessRegister(nextInstr->arg1), program[registers[nextInstr->arg2]]);
+					break;
+				case Mnemonic::PCall_R_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					++callDepth;
+					return _executeFunc(_accessRegister(nextInstr->arg1), nextInstr->arg2);
+					break;
+				case Mnemonic::PCall_A_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					++callDepth;
+					return _executeFunc(nextInstr->arg1, _accessRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::PCall_A_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					++callDepth;
+					return _executeFunc(nextInstr->arg1, program[nextInstr->arg2]);
+					break;
+				case Mnemonic::PCall_A_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					++callDepth;
+					return _executeFunc(nextInstr->arg1, program[registers[nextInstr->arg2]]);
+					break;
+				case Mnemonic::PCall_A_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					++callDepth;
+					return _executeFunc(nextInstr->arg1, nextInstr->arg2);
+					break;
+				case Mnemonic::PCall_I_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					++callDepth;
+					return _executeFunc(program[registers[nextInstr->arg1]], _accessRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::PCall_I_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					++callDepth;
+					return _executeFunc(program[registers[nextInstr->arg1]], program[nextInstr->arg2]);
+					break;
+				case Mnemonic::PCall_I_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					++callDepth;
+					return _executeFunc(program[registers[nextInstr->arg1]], program[registers[nextInstr->arg2]]);
+					break;
+				case Mnemonic::PCall_I_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					++callDepth;
+					return _executeFunc(program[registers[nextInstr->arg1]], nextInstr->arg2);
+					break;
+				case Mnemonic::RPCall_R_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + _accessRegister(nextInstr->arg1), _accessRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::RPCall_R_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + _accessRegister(nextInstr->arg1), program[nextInstr->arg2]);
+					break;
+				case Mnemonic::RPCall_R_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + _accessRegister(nextInstr->arg1), program[registers[nextInstr->arg2]]);
+					break;
+				case Mnemonic::RPCall_R_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + _accessRegister(nextInstr->arg1), nextInstr->arg2);
+					break;
+				case Mnemonic::RPCall_A_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + nextInstr->arg1, _accessRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::RPCall_A_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + nextInstr->arg1, program[nextInstr->arg2]);
+					break;
+				case Mnemonic::RPCall_A_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + nextInstr->arg1, program[registers[nextInstr->arg2]]);
+					break;
+				case Mnemonic::RPCall_A_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + nextInstr->arg1, nextInstr->arg2);
+					break;
+				case Mnemonic::RPCall_I_R:
+					if (!_testPrivilege(static_cast<uint8_t>(_accessRegister(nextInstr->arg2))))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + program[registers[nextInstr->arg1]], _accessRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::RPCall_I_A:
+					if (!_testPrivilege(static_cast<uint8_t>(program[nextInstr->arg2])))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + program[registers[nextInstr->arg1]], program[nextInstr->arg2]);
+					break;
+				case Mnemonic::RPCall_I_I:
+					if (!_testPrivilege(static_cast<uint8_t>(program[registers[nextInstr->arg2]])))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + program[registers[nextInstr->arg1]], program[registers[nextInstr->arg2]]);
+					break;
+				case Mnemonic::RPCall_I_V:
+					if (!_testPrivilege(static_cast<uint8_t>(nextInstr->arg2)))
+						return false;
+					++callDepth;
+					return _executeFunc(instrPtr + program[registers[nextInstr->arg1]], nextInstr->arg2);
+					break;
+				case Mnemonic::PrintC_R:
+					std::cout << static_cast<char>(_accessRegister(nextInstr->arg1));
+					break;
+				case Mnemonic::PrintC_A:
+					std::cout << static_cast<char>(program[nextInstr->arg1]);
+					break;
+				case Mnemonic::PrintC_I:
+					std::cout << static_cast<char>(program[registers[nextInstr->arg1]]);
+					break;
+				case Mnemonic::PrintC_V:
+					std::cout << static_cast<char>(nextInstr->arg1);
+					break;
+				case Mnemonic::EnableExt_R:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].enabled = true;
+					break;
+				case Mnemonic::EnableExt_A:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(program[nextInstr->arg1])].enabled = true;
+					break;
+				case Mnemonic::EnableExt_I:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].enabled = true;
+					break;
+				case Mnemonic::EnableExt_V:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(nextInstr->arg1)].enabled = true;
+					break;
+				case Mnemonic::DisableExt_R:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg1))].enabled = false;
+					break;
+				case Mnemonic::DisableExt_A:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(program[nextInstr->arg1])].enabled = false;
+					break;
+				case Mnemonic::DisableExt_I:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg1]])].enabled = false;
+					break;
+				case Mnemonic::DisableExt_V:
+					if (!_testPrivilege(255))
+						return false;
+					extensionData[static_cast<uint8_t>(nextInstr->arg1)].enabled = false;
+					break;
+				case Mnemonic::IsExtEnabled_R_R:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_R_A:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(program[nextInstr->arg2])].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_R_I:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_R_V:
+					_accessRegister(nextInstr->arg1) = extensionData[static_cast<uint8_t>(nextInstr->arg2)].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_A_R:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_A_A:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(program[nextInstr->arg2])].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_A_I:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_A_V:
+					program[nextInstr->arg1] = extensionData[static_cast<uint8_t>(nextInstr->arg2)].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_I_R:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(_accessRegister(nextInstr->arg2))].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_I_A:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(program[nextInstr->arg2])].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_I_I:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(program[registers[nextInstr->arg2]])].enabled;
+					break;
+				case Mnemonic::IsExtEnabled_I_V:
+					program[registers[nextInstr->arg1]] = extensionData[static_cast<uint8_t>(nextInstr->arg2)].enabled;
+					break;
+
+				default:
+					return _performFloats(nextInstr);
 			}
 			
 			return true;
 		}
 
+		bool _performFloats(Instruction* nextInstr) {
+			if (!_testPrivilege(extensionData[static_cast<uint8_t>(Extensions::FloatOperations)].privilege))
+				return false;
+
+			if (!extensionData[static_cast<uint8_t>(Extensions::FloatOperations)].enabled) {
+				error = { ErrorCode::DisabledExtensionUse, instrPtr };
+				running = false;
+				return false;
+			}
+
+			switch (nextInstr->mnemonic) {
+				case Mnemonic::FpMov_R_R:
+					_accessFpRegister(nextInstr->arg1) = _accessFpRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::FpMov_R_V:
+					_accessFpRegister(nextInstr->arg1) = static_cast<float>(nextInstr->arg2);
+					break;
+				case Mnemonic::FpAdd_R_R:
+					_accessFpRegister(nextInstr->arg1) += _accessFpRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::FpAdd_R_V:
+					_accessFpRegister(nextInstr->arg1) += static_cast<float>(nextInstr->arg2);
+					break;
+				case Mnemonic::FpSub_R_R:
+					_accessFpRegister(nextInstr->arg1) -= _accessFpRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::FpSub_R_V:
+					_accessFpRegister(nextInstr->arg1) -= static_cast<float>(nextInstr->arg2);
+					break;
+				case Mnemonic::FpMul_R_R:
+					_accessFpRegister(nextInstr->arg1) *= _accessFpRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::FpMul_R_V:
+					_accessFpRegister(nextInstr->arg1) *= static_cast<float>(nextInstr->arg2);
+					break;
+				case Mnemonic::FpDiv_R_R:
+					_accessFpRegister(nextInstr->arg1) /= _accessFpRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::FpDiv_R_V:
+					_accessFpRegister(nextInstr->arg1) /= static_cast<float>(nextInstr->arg2);
+					break;
+				case Mnemonic::FpSign_R_R:
+				case Mnemonic::FpSign_R_V:
+					if (_accessFpRegister(nextInstr->arg1) < 0) {
+						controlByte &= ~TestFloatNegative;
+						controlByte |= TestFloatPositive;
+					}
+					else {
+						controlByte &= ~TestFloatPositive;
+						controlByte |= TestFloatNegative;
+					}
+					break;
+				case Mnemonic::FpRound_R:
+					_accessFpRegister(nextInstr->arg1) = std::round(_accessFpRegister(nextInstr->arg1));
+					break;
+				case Mnemonic::FpMod_R_R:
+					_accessFpRegister(nextInstr->arg1) = _accessFpRegister(nextInstr->arg1) / std::floor(_accessFpRegister(nextInstr->arg1) / _accessFpRegister(nextInstr->arg2)) - _accessFpRegister(nextInstr->arg2);
+					break;
+				case Mnemonic::FpMod_R_V:
+					_accessFpRegister(nextInstr->arg1) = _accessFpRegister(nextInstr->arg1) / std::floor(_accessFpRegister(nextInstr->arg1) / static_cast<float>(nextInstr->arg2)) - static_cast<float>(nextInstr->arg2);
+					break;
+				case Mnemonic::FpTest_R_R:
+					setFloatControl(_accessFpRegister(nextInstr->arg1), _accessFpRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::FpTest_R_V:
+					setFloatControl(_accessFpRegister(nextInstr->arg1), static_cast<float>(nextInstr->arg2));
+					break;
+				case Mnemonic::FpTest_V_R:
+					setFloatControl(static_cast<float>(nextInstr->arg1), _accessFpRegister(nextInstr->arg2));
+					break;
+				case Mnemonic::FpTest_V_V:
+					setFloatControl(static_cast<float>(nextInstr->arg1), static_cast<float>(nextInstr->arg2));
+					break;
+				case Mnemonic::FpNan_R:
+					setControl(std::isnan(_accessFpRegister(nextInstr->arg1)), TestFloatNan);
+					break;
+				case Mnemonic::FpInf_R:
+					setControl(std::isinf(_accessFpRegister(nextInstr->arg1)), TestFloatInf);
+					break;
+				case Mnemonic::FpPi_R:
+					_accessFpRegister(nextInstr->arg1) = 3.1415926536f;
+					break;
+				case Mnemonic::FpE_R:
+					_accessFpRegister(nextInstr->arg1) = 2.7182818285f;
+					break;
+				case Mnemonic::FpLn2_R:
+					_accessFpRegister(nextInstr->arg1) = 0.6931471806f;
+					break;
+				case Mnemonic::FpLn10_R:
+					_accessFpRegister(nextInstr->arg1) = 2.302585093f;
+					break;
+				case Mnemonic::FpLog10_R:
+					_accessFpRegister(nextInstr->arg1) = 0.3010299957f;
+					break;
+				case Mnemonic::FpPrint_R:
+					std::cout << _accessFpRegister(nextInstr->arg1);
+					break;
+				case Mnemonic::FpPrint_V:
+					std::cout << static_cast<float>(nextInstr->arg1);
+					break;
+
+				default:
+					_onInvalidDecode();
+					break;
+			}
+
+			return true;
+		}
+
 		void _printError() {
 			std::cout << formatErrorCode() << "\n";
-			std::cout << "While running instruction on address 0x" << std::hex << errorCode.instrPtr << ".\n";
+			std::cout << "While running instruction on address 0x" << std::hex << error.instrPtr << ".\n";
 		}
 	public:
 		VM() : innerState(*this) {}
@@ -1942,7 +2920,8 @@ namespace sbl::vm {
 		bool run(uint32_t memoffset, T& bytecode) {
 			program = &bytecode[0];
 			registers.fill(0);
-			errorCode = { ErrorCode::None, 0 };
+			fpregisters.fill(0.);
+			error = { ErrorCode::None, 0 };
 			stackPtr = 1000;
 			running = true;
 			instrCount = 0;
@@ -1950,20 +2929,33 @@ namespace sbl::vm {
 			instrPtr = memoffset;
 			handling = InterruptType::NoInterrupt;
 			nextInstrCountInterrupt = 0;
-			interrupts.fill({ 0, 0 });
+			interrupts.fill({});
+			instrPrivileges.fill(0);
+			extensionData.fill({});
+
+			privilegeLevel = 255;
+			callDepth = 0;
 			
 			auto oldSync = std::ios::sync_with_stdio(false);
 
 			startExecTime = ch::high_resolution_clock::now().time_since_epoch();
 
-			while (_execute()) {
+			try {
+				while (_execute()) {
+				}
+			}
+			catch (ErrorCode&) {
+			}
+			catch (...) {
+				error = { ErrorCode::UnknownError, instrPtr };
+				running = false;
 			}
 
 			endExecTime = ch::high_resolution_clock::now().time_since_epoch();
 
 			std::ios::sync_with_stdio(oldSync);
 
-			if (!running && errorCode.code != ErrorCode::None) {
+			if (!running && error.code != ErrorCode::None) {
 				_printError();
 			}
 
@@ -2009,12 +3001,12 @@ namespace sbl::vm {
 		}
 
 		Error getError() const {
-			return errorCode;
+			return error;
 		}
 
 		std::string formatErrorCode() const {
 			std::string errorMsg = "Error: ";
-			switch (errorCode.code) {
+			switch (error.code) {
 				case ErrorCode::InvalidInstruction:
 					errorMsg += "Attempting to execute invalid instruction";
 					break;
@@ -2036,8 +3028,23 @@ namespace sbl::vm {
 				case ErrorCode::InvalidNativeId:
 					errorMsg += "Attempt to execute nonexistent Native function";
 					break;
-				case ErrorCode::StackUnderflow:
+				case ErrorCode::StackOverrflow:
 					errorMsg += "Ran out of stack storage";
+					break;
+				case ErrorCode::UnpirivlegedInstrExec:
+					errorMsg += "Unprivileged access to instruction";
+					break;
+				case ErrorCode::UnprivilegedIntRaise:
+					errorMsg += "Unprivileged attempt to raise an interrupt";
+					break;
+				case ErrorCode::InvalidRegisterId:
+					errorMsg += "Register outside of range of available registers used";
+					break;
+				case ErrorCode::DisabledExtensionUse:
+					errorMsg += "Attempt to use instruction from disabled extension";
+					break;
+				case ErrorCode::UnknownError:
+					errorMsg += "Unknown error";
 					break;
 			}
 			errorMsg += '.';
@@ -2045,15 +3052,12 @@ namespace sbl::vm {
 		}
 	};
 
-	inline vm::State::State(VM& vm) : instrCount(vm.instrCount), controlByte(vm.controlByte),
-		nextInstrCountInterrupt(vm.nextInstrCountInterrupt), registers(vm.registers),
-		program(vm.program), stackPtr(vm.stackPtr), instrPtr(vm.instrPtr), basePtr(vm.basePtr),
-		loopPtr(vm.loopPtr), handling(vm.handling), errorCode(vm.errorCode), running(vm.running)
+	inline vm::State::State(VM& vm) : vm(&vm)
 	{
 	}
 
 	inline uint32_t vm::State::nextParameter() {
-		return program[stackPtr++];
+		return vm->program[vm->stackPtr++];
 	}
 
 	inline std::vector<uint32_t> vm::State::nextParameters(size_t count) {
@@ -2065,13 +3069,52 @@ namespace sbl::vm {
 	}
 
 	inline void vm::State::returnValue(uint32_t value) {
-		if (!stackPtr) {
-			errorCode = { ErrorCode::StackUnderflow, instrPtr };
-			running = false;
+		if (!vm->stackPtr) {
+			vm->error = { ErrorCode::StackOverrflow, vm->instrPtr };
+			vm->running = false;
 		}
-		program[--stackPtr] = value;
+		vm->program[--vm->stackPtr] = value;
 	}
 
+	inline uint32_t vm::State::instrPtr() const {
+		return vm->instrPtr;
+	}
+	
+	inline Error vm::State::currentError() const {
+		return vm->error;
+	}
+
+	inline InterruptType vm::State::currentInterrupt() const {
+		return vm->handling;
+	}
+
+	inline uint32_t vm::State::currentPrivilege() const {
+		return vm->privilegeLevel;
+	}
+
+	inline bool vm::State::isIntEnabled(uint8_t intCode) const {
+		return vm->interrupts[intCode].enabled;
+	}
+
+	inline uint32_t vm::State::instrPrivilegeRequired(Mnemonic m) const {
+		return vm->instrPrivileges[static_cast<uint32_t>(m)];
+	}
+	
+	inline uint32_t vm::State::interruptPrivilege(uint8_t intCode) const {
+		return vm->interrupts[intCode].privilege;
+	}
+
+	inline void vm::State::addArgument(uint32_t arg) {
+		vm->_pushStack(arg);
+	}
+
+	inline void vm::State::runFunction(uint32_t address) {
+		vm->_executeFunc(address);
+	}
+
+	inline void vm::State::runFunction(uint32_t address, uint8_t privilege) {
+		vm->_executeFunc(address, privilege);
+	}
 }
 
 #endif	//BUFFED_VM_HEADER_H_

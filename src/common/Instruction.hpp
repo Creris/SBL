@@ -188,15 +188,15 @@ namespace sbl::vm {
 		Vcall_I_R, Vcall_I_A, Vcall_I_I, Vcall_I_V,
 		Vcall_V_R, Vcall_V_A, Vcall_V_I, Vcall_V_V,
 
-		RegInt_R_R, Regint_R_I, Regint_R_A,
-		RegInt_A_R, Regint_A_I, Regint_A_A,
-		RegInt_I_R, Regint_I_I, Regint_I_A,
-		RegInt_V_R, Regint_V_I, Regint_V_A,
+		RegInt_R_R, Regint_R_A, Regint_R_I,
+		RegInt_A_R, Regint_A_A, Regint_A_I,
+		RegInt_I_R, Regint_I_A, Regint_I_I,
+		RegInt_V_R, Regint_V_A, Regint_V_I,
 
-		RRegInt_R_R, RRegInt_R_I, RRegInt_R_A,
-		RRegInt_A_R, RRegInt_A_I, RRegInt_A_A,
-		RRegInt_I_R, RRegInt_I_I, RRegInt_I_A,
-		RRegInt_V_R, RRegInt_V_I, RRegInt_V_A,
+		RRegInt_R_R, RRegInt_R_A, RRegInt_R_I,
+		RRegInt_A_R, RRegInt_A_A, RRegInt_A_I,
+		RRegInt_I_R, RRegInt_I_A, RRegInt_I_I,
+		RRegInt_V_R, RRegInt_V_A, RRegInt_V_I,
 
 		Time_A, Time_I,
 		Time64_R, Time64_A, Time64_I,
@@ -230,12 +230,107 @@ namespace sbl::vm {
 		ICountInt64_R, ICountInt64_A, ICountInt64_I,
 		RICountInt64_R, RICountInt64_A, RICountInt64_I,
 
+		GetPrivlg_R, GetPrivlg_A, GetPrivlg_I,
+
+		SetInstrPrivlg_R_R, SetInstrPrivlg_R_A, SetInstrPrivlg_R_I, SetInstrPrivlg_R_V,
+		SetInstrPrivlg_A_R, SetInstrPrivlg_A_A, SetInstrPrivlg_A_I, SetInstrPrivlg_A_V,
+		SetInstrPrivlg_I_R, SetInstrPrivlg_I_A, SetInstrPrivlg_I_I, SetInstrPrivlg_I_V,
+		SetInstrPrivlg_V_R, SetInstrPrivlg_V_A, SetInstrPrivlg_V_I, SetInstrPrivlg_V_V,
+
+
+		SetPrivlg_R, SetPrivlg_A, SetPrivlg_I, SetPrivlg_V,
+
+		GetInstrPrivlg_R_R, GetInstrPrivlg_R_A, GetInstrPrivlg_R_I, GetInstrPrivlg_R_V,
+		GetInstrPrivlg_A_R, GetInstrPrivlg_A_A, GetInstrPrivlg_A_I, GetInstrPrivlg_A_V,
+		GetInstrPrivlg_I_R, GetInstrPrivlg_I_A, GetInstrPrivlg_I_I, GetInstrPrivlg_I_V,
+
+
+		SetIntPrivlg_R_R, SetIntPrivlg_R_A, SetIntPrivlg_R_I, SetIntPrivlg_R_V,
+		SetIntPrivlg_A_R, SetIntPrivlg_A_A, SetIntPrivlg_A_I, SetIntPrivlg_A_V,
+		SetIntPrivlg_I_R, SetIntPrivlg_I_A, SetIntPrivlg_I_I, SetIntPrivlg_I_V,
+		SetIntPrivlg_V_R, SetIntPrivlg_V_A, SetIntPrivlg_V_I, SetIntPrivlg_V_V,
+
+		GetIntPrivlg_R_R, GetIntPrivlg_R_A, GetIntPrivlg_R_I, GetIntPrivlg_R_V,
+		GetIntPrivlg_A_R, GetIntPrivlg_A_A, GetIntPrivlg_A_I, GetIntPrivlg_A_V,
+		GetIntPrivlg_I_R, GetIntPrivlg_I_A, GetIntPrivlg_I_I, GetIntPrivlg_I_V,
+
+
+		SetIntExecPrivlg_R_R, SetIntExecPrivlg_R_A, SetIntExecPrivlg_R_I, SetIntExecPrivlg_R_V,
+		SetIntExecPrivlg_A_R, SetIntExecPrivlg_A_A, SetIntExecPrivlg_A_I, SetIntExecPrivlg_A_V,
+		SetIntExecPrivlg_I_R, SetIntExecPrivlg_I_A, SetIntExecPrivlg_I_I, SetIntExecPrivlg_I_V,
+		SetIntExecPrivlg_V_R, SetIntExecPrivlg_V_A, SetIntExecPrivlg_V_I, SetIntExecPrivlg_V_V,
+
+		GetIntExecPrivlg_R_R, GetIntExecPrivlg_R_A, GetIntExecPrivlg_R_I, GetIntExecPrivlg_R_V,
+		GetIntExecPrivlg_A_R, GetIntExecPrivlg_A_A, GetIntExecPrivlg_A_I, GetIntExecPrivlg_A_V,
+		GetIntExecPrivlg_I_R, GetIntExecPrivlg_I_A, GetIntExecPrivlg_I_I, GetIntExecPrivlg_I_V,
+
+		SetExtPrivlg_R_R, SetExtPrivlg_R_A, SetExtPrivlg_R_I, SetExtPrivlg_R_V,
+		SetExtPrivlg_A_R, SetExtPrivlg_A_A, SetExtPrivlg_A_I, SetExtPrivlg_A_V,
+		SetExtPrivlg_I_R, SetExtPrivlg_I_A, SetExtPrivlg_I_I, SetExtPrivlg_I_V,
+		SetExtPrivlg_V_R, SetExtPrivlg_V_A, SetExtPrivlg_V_I, SetExtPrivlg_V_V,
+
+		GetExtPrivlg_R_R, GetExtPrivlg_R_A, GetExtPrivlg_R_I, GetExtPrivlg_R_V,
+		GetExtPrivlg_A_R, GetExtPrivlg_A_A, GetExtPrivlg_A_I, GetExtPrivlg_A_V,
+		GetExtPrivlg_I_R, GetExtPrivlg_I_A, GetExtPrivlg_I_I, GetExtPrivlg_I_V,
+
+
+		PCall_R_R, PCall_R_A, PCall_R_I, PCall_R_V,
+		PCall_A_R, PCall_A_A, PCall_A_I, PCall_A_V,
+		PCall_I_R, PCall_I_A, PCall_I_I, PCall_I_V,
+
+		RPCall_R_R, RPCall_R_A, RPCall_R_I, RPCall_R_V,
+		RPCall_A_R, RPCall_A_A, RPCall_A_I, RPCall_A_V,
+		RPCall_I_R, RPCall_I_A, RPCall_I_I, RPCall_I_V,
+
+		PrintC_R, PrintC_A, PrintC_I, PrintC_V,
+
+
+		EnableExt_R, EnableExt_A, EnableExt_I, EnableExt_V,
+		DisableExt_R, DisableExt_A, DisableExt_I, DisableExt_V,
+
+		IsExtEnabled_R_R, IsExtEnabled_R_A, IsExtEnabled_R_I, IsExtEnabled_R_V,
+		IsExtEnabled_A_R, IsExtEnabled_A_A, IsExtEnabled_A_I, IsExtEnabled_A_V,
+		IsExtEnabled_I_R, IsExtEnabled_I_A, IsExtEnabled_I_I, IsExtEnabled_I_V,
+
+
+		//Extension: Floating point
+		FpMov_R_R, FpMov_R_V,
+
+		FpAdd_R_R, FpAdd_R_V,
+		FpSub_R_R, FpSub_R_V,
+		FpMul_R_R, FpMul_R_V,
+		FpDiv_R_R, FpDiv_R_V,
+
+		FpSign_R_R, FpSign_R_V,
+		FpRound_R,
+
+		FpTest_R_R, FpTest_R_V,
+		FpTest_V_R, FpTest_V_V,
+
+		FpMod_R_R, FpMod_R_V,
+
+		FpNan_R,
+		FpInf_R,
+
+		FpPi_R,
+		FpE_R,
+		FpLn2_R,
+		FpLn10_R,
+		FpLog10_R,
+
+		FpPrint_R, FpPrint_V,
+		//End extension: Floating point
+
 		//This variable is important, it marks the total count of instructions
 		//It will stop working when we introduce 2byte instructions(>=192 on first byte)
 		TotalCount,
 
 		Invalid,
 	};
+
+	bool operator>=(uint32_t v, Mnemonic m) {
+		return v >= static_cast<uint32_t>(m);
+	}
 
 	class Instruction {
 		static Instruction& _constructInvalid() {
