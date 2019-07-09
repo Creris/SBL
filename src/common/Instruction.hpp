@@ -1,29 +1,52 @@
 #pragma once
 
-#ifndef HEADER_INSTRUCTION_H_
-#define HEADER_INSTRUCTION_H_
+#ifndef COMMON_INSTRUCTION_HEADER_H_
+#define COMMON_INSTRUCTION_HEADER_H_
 
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
-namespace sbl::vm {
-	enum class Mnemonic : uint32_t {
-		/* 0 Argument mnemonics */
+namespace sbl::cmn {
+	/*
+		Note:
+			Mnemonics are split into groups according to what the instructions
+			that these mnemonics encode do.
+
+			Furthermore, the mnemonics are split into chunks of size 128(2^7)
+			which creates a lot of artifical empty holes where mnemonic is
+			smaller than some other mnemonic but does not encode anything.
+
+			The space wasted with this structure is and given chunk size is: 431.
+
+			Smaller chunk sizes can be used, but if we want to add more mnemonics
+			into certain category in future, we will run out of space faster
+			which will lead into the need to create new detached chunk of given
+			category, which will slightly slower down the VM too since it will require
+			to perform additional checks.
+
+			Currently the spare slots per category is as follows:
+				Basic:		 66
+				Arithmetic:	 20
+				Logical:	 29
+				Allocation:	 68
+				Interrupt:	 82
+				Privilege:	 97
+				Float:		 69
+	*/
+	enum class Mnemonic {
+		/*
+			Basic instructions
+		*/
 		Nop,
-
-		Halt,
-		End,
-
+		Halt, End,
 		Ret,
+		Loop, Endloop,
 
-		Loop,
-		Endloop,
+		Push_R, Push_A, Push_I, Push_V, Push_All,
+		Pop_R, Pop_A, Pop_I, Pop_All,
 
-		/* 1 Argument mnemonics */
-		Push_R, Push_A, Push_I, Push_V,
-
-		Pop_R, Pop_A, Pop_I,
+		Clear_All,
 
 		Inc_R, Inc_A, Inc_I,
 		Dec_R, Dec_A, Dec_I,
@@ -36,6 +59,7 @@ namespace sbl::vm {
 
 		Print_R, Print_A, Print_I, Print_V,
 		PrintS_R, PrintS_A, PrintS_I, PrintS_V,
+		PrintC_R, PrintC_A, PrintC_I, PrintC_V,
 		Printstr_A, Printstr_I,
 
 		Jmp_R, Jmp_A, Jmp_I,
@@ -66,19 +90,13 @@ namespace sbl::vm {
 		RJe_R, RJe_A, RJe_I,
 		RJne_R, RJne_A, RJne_I,
 
-		Not_R,
+		Time_R, Time_A, Time_I,
+		Time64_R, Time64_A, Time64_I,
 
-		Time_R,
-		ICount_R,
+		ICount_R, ICount_A, ICount_I,
+		ICount64_R, ICount64_A, ICount64_I,
 
-		Dealloc_R, Dealloc_A, Dealloc_I,
-
-		Raise_R, Raise_A, Raise_I, Raise_V,
-		DisableInt_R, DisableInt_V,
-		EnableInt_R, EnableInt_V,
-		ICountInt_R, ICountInt_V,
-
-		/* 2 Argument mnemonics */
+		ExecInstr_A, ExecInstr_I,
 
 		Mov_R_R, Mov_R_A, Mov_R_I, Mov_R_V,
 		Mov_A_R, Mov_A_A, Mov_A_I, Mov_A_V,
@@ -103,7 +121,59 @@ namespace sbl::vm {
 		Laddr_R_A, Laddr_R_I, Laddr_A_A, Laddr_A_I,
 		Laddr_I_A, Laddr_I_I,
 
-		Add_R_R, Add_R_I, Add_R_A, Add_R_V,
+		Loadload_R_A, Loadload_R_I,
+		Loadload_A_A, Loadload_A_I,
+		Loadload_I_A, Loadload_I_I,
+
+		Vcall_R_R, Vcall_R_A, Vcall_R_I, Vcall_R_V,
+		Vcall_A_R, Vcall_A_A, Vcall_A_I, Vcall_A_V,
+		Vcall_I_R, Vcall_I_A, Vcall_I_I, Vcall_I_V,
+		Vcall_V_R, Vcall_V_A, Vcall_V_I, Vcall_V_V,
+
+		RVcall_R_R, RVcall_R_A, RVcall_R_I, RVcall_R_V,
+		RVcall_A_R, RVcall_A_A, RVcall_A_I, RVcall_A_V,
+		RVcall_I_R, RVcall_I_A, RVcall_I_I, RVcall_I_V,
+		RVcall_V_R, RVcall_V_A, RVcall_V_I, RVcall_V_V,
+
+		NtvCall_R, NtvCall_A, NtvCall_I, NtvCall_V,
+
+		GetNtvId_R_A, GetNtvId_R_I,
+		GetNtvId_A_A, GetNtvId_A_I,
+		GetNtvId_I_A, GetNtvId_I_I,
+
+		Xchg_R_R, Xchg_R_A, Xchg_R_I,
+		Xchg_A_R, Xchg_A_A, Xchg_A_I,
+		Xchg_I_R, Xchg_I_A, Xchg_I_I,
+
+		ClrCb,
+
+		Hotpatch_A_A, Hotpatch_A_I,
+		Hotpatch_I_A, Hotpatch_I_I,
+
+		RHotpatch_A_A, RHotpatch_A_I,
+		RHotpatch_I_A, RHotpatch_I_I,
+
+		EnableExt_R, EnableExt_A, EnableExt_I, EnableExt_V,
+		DisableExt_R, DisableExt_A, DisableExt_I, DisableExt_V,
+
+		IsExtEnabled_R_R, IsExtEnabled_R_A, IsExtEnabled_R_I, IsExtEnabled_R_V,
+		IsExtEnabled_A_R, IsExtEnabled_A_A, IsExtEnabled_A_I, IsExtEnabled_A_V,
+		IsExtEnabled_I_R, IsExtEnabled_I_A, IsExtEnabled_I_I, IsExtEnabled_I_V,
+
+		SetSegmntAccs_R_R, SetSegmntAccs_R_A, SetSegmntAccs_R_I, SetSegmntAccs_R_V,
+		SetSegmntAccs_A_R, SetSegmntAccs_A_A, SetSegmntAccs_A_I, SetSegmntAccs_A_V,
+		SetSegmntAccs_I_R, SetSegmntAccs_I_A, SetSegmntAccs_I_I, SetSegmntAccs_I_V,
+		SetSegmntAccs_V_R, SetSegmntAccs_V_A, SetSegmntAccs_V_I, SetSegmntAccs_V_V,
+
+		GetSegmntAccs_R_R, GetSegmntAccs_R_A, GetSegmntAccs_R_I, GetSegmntAccs_R_V,
+		GetSegmntAccs_A_R, GetSegmntAccs_A_A, GetSegmntAccs_A_I, GetSegmntAccs_A_V,
+		GetSegmntAccs_I_R, GetSegmntAccs_I_A, GetSegmntAccs_I_I, GetSegmntAccs_I_V,
+
+		/*
+			End of Basic instructions
+			Beginning of Arithmetic instructions
+		*/
+		Add_R_R = 128 * 3, Add_R_I, Add_R_A, Add_R_V,
 		Add_I_R, Add_I_I, Add_I_A, Add_I_V,
 		Add_A_R, Add_A_I, Add_A_A, Add_A_V,
 
@@ -123,11 +193,6 @@ namespace sbl::vm {
 		Mod_A_R, Mod_A_A, Mod_A_I, Mod_A_V,
 		Mod_I_R, Mod_I_A, Mod_I_I, Mod_I_V,
 
-		Test_R_R, Test_R_A, Test_R_I, Test_R_V,
-		Test_A_R, Test_A_A, Test_A_I, Test_A_V,
-		Test_I_R, Test_I_A, Test_I_I, Test_I_V,
-
-
 		Lsh_R_R, Lsh_R_A, Lsh_R_I, Lsh_R_V,
 		Lsh_A_R, Lsh_A_A, Lsh_A_I, Lsh_A_V,
 		Lsh_I_R, Lsh_I_A, Lsh_I_I, Lsh_I_V,
@@ -144,8 +209,11 @@ namespace sbl::vm {
 		Rrsh_A_R, Rrsh_A_A, Rrsh_A_I, Rrsh_A_V,
 		Rrsh_I_R, Rrsh_I_A, Rrsh_I_I, Rrsh_I_V,
 
-
-		And_R_R, And_R_A, And_R_I, And_R_V,
+		/*
+			End of Arithmetic instructions
+			Beginning of Logical instructions
+		*/
+		And_R_R = 128 * 4, And_R_A, And_R_I, And_R_V,
 		And_A_R, And_A_A, And_A_I, And_A_V,
 		And_I_R, And_I_A, And_I_I, And_I_V,
 
@@ -156,7 +224,6 @@ namespace sbl::vm {
 		Xor_R_R, Xor_R_A, Xor_R_I, Xor_R_V,
 		Xor_A_R, Xor_A_A, Xor_A_I, Xor_A_V,
 		Xor_I_R, Xor_I_A, Xor_I_I, Xor_I_V,
-
 
 		Eq_R_R, Eq_R_A, Eq_R_I, Eq_R_V,
 		Eq_A_R, Eq_A_A, Eq_A_I, Eq_A_V,
@@ -174,19 +241,46 @@ namespace sbl::vm {
 		Bt_A_R, Bt_A_A, Bt_A_I, Bt_A_V,
 		Bt_I_R, Bt_I_A, Bt_I_I, Bt_I_V,
 
+		Not_R, Not_A, Not_I,
 
-		Loadload_R_A, Loadload_R_I,
-		Loadload_A_A, Loadload_A_I,
-		Loadload_I_A, Loadload_I_I,
+		Test_R_R, Test_R_A, Test_R_I, Test_R_V,
+		Test_A_R, Test_A_A, Test_A_I, Test_A_V,
+		Test_I_R, Test_I_A, Test_I_I, Test_I_V,
 
-		Alloc_R_R, Alloc_R_A, Alloc_R_I, Alloc_R_V,
+		/*
+			End of Logical instructions
+			Beginning of Allocation instructions
+		*/
+		Alloc_R_R = 128 * 5, Alloc_R_A, Alloc_R_I, Alloc_R_V,
 		Alloc_A_R, Alloc_A_A, Alloc_A_I, Alloc_A_V,
 		Alloc_I_R, Alloc_I_A, Alloc_I_I, Alloc_I_V,
 
-		Vcall_R_R, Vcall_R_A, Vcall_R_I, Vcall_R_V,
-		Vcall_A_R, Vcall_A_A, Vcall_A_I, Vcall_A_V,
-		Vcall_I_R, Vcall_I_A, Vcall_I_I, Vcall_I_V,
-		Vcall_V_R, Vcall_V_A, Vcall_V_I, Vcall_V_V,
+		Dealloc_R, Dealloc_A, Dealloc_I,
+
+		DynOffset_R, DynOffset_A, DynOffset_I, DynOffset_V,
+		ClrDynOffset,
+
+		LoadDyn_R_R, LoadDyn_R_A, LoadDyn_R_I, LoadDyn_R_V,
+		LoadDyn_A_R, LoadDyn_A_A, LoadDyn_A_I, LoadDyn_A_V,
+		LoadDyn_I_R, LoadDyn_I_A, LoadDyn_I_I, LoadDyn_I_V,
+
+		WriteDyn_R_R, WriteDyn_R_A, WriteDyn_R_I, WriteDyn_R_V,
+		WriteDyn_A_R, WriteDyn_A_A, WriteDyn_A_I, WriteDyn_A_V,
+		WriteDyn_I_R, WriteDyn_I_A, WriteDyn_I_I, WriteDyn_I_V,
+		WriteDyn_V_R, WriteDyn_V_A, WriteDyn_V_I, WriteDyn_V_V,
+
+		GetDynSize_R_R, GetDynSize_R_A, GetDynSize_R_I, GetDynSize_R_V,
+		GetDynSize_A_R, GetDynSize_A_A, GetDynSize_A_I, GetDynSize_A_V,
+		GetDynSize_I_R, GetDynSize_I_A, GetDynSize_I_I, GetDynSize_I_V,
+
+		/*
+			End of Allocation instructions
+			Beginning of Interrupt instructions
+		*/
+		Raise_R = 128 * 6, Raise_A, Raise_I, Raise_V,
+		DisableInt_R, DisableInt_V,
+		EnableInt_R, EnableInt_V,
+		ICountInt_R, ICountInt_V,
 
 		RegInt_R_R, Regint_R_A, Regint_R_I,
 		RegInt_A_R, Regint_A_A, Regint_A_I,
@@ -198,52 +292,33 @@ namespace sbl::vm {
 		RRegInt_I_R, RRegInt_I_A, RRegInt_I_I,
 		RRegInt_V_R, RRegInt_V_A, RRegInt_V_I,
 
-		Time_A, Time_I,
-		Time64_R, Time64_A, Time64_I,
-		ICount_A, ICount_I,
-		ICount64_R, ICount64_A, ICount64_I,
-
-		NtvCall_R, NtvCall_A, NtvCall_I, NtvCall_V,
-
 		IRet,
 
 		RICountInt_R, RICountInt_V,
-
-		Push_All, Pop_All,
-
-		Clear_All,
-
-		GetNtvId_R_A, GetNtvId_R_I,
-		GetNtvId_A_A, GetNtvId_A_I,
-		GetNtvId_I_A, GetNtvId_I_I,
-
-		Xchg_R_R, Xchg_R_A, Xchg_R_I,
-		Xchg_A_R, Xchg_A_A, Xchg_A_I,
-		Xchg_I_R, Xchg_I_A, Xchg_I_I,
 
 		DisableAllInts,
 		RestoreInts,
 		EnableAllInts,
 
-		ClrCb,
-
 		ICountInt64_R, ICountInt64_A, ICountInt64_I,
 		RICountInt64_R, RICountInt64_A, RICountInt64_I,
 
-		GetPrivlg_R, GetPrivlg_A, GetPrivlg_I,
+		/*
+			End of Interrupt instructions
+			Beginning of Privilege instructions
+		*/
+		GetPrivlg_R = 128 * 7, GetPrivlg_A, GetPrivlg_I,
 
 		SetInstrPrivlg_R_R, SetInstrPrivlg_R_A, SetInstrPrivlg_R_I, SetInstrPrivlg_R_V,
 		SetInstrPrivlg_A_R, SetInstrPrivlg_A_A, SetInstrPrivlg_A_I, SetInstrPrivlg_A_V,
 		SetInstrPrivlg_I_R, SetInstrPrivlg_I_A, SetInstrPrivlg_I_I, SetInstrPrivlg_I_V,
 		SetInstrPrivlg_V_R, SetInstrPrivlg_V_A, SetInstrPrivlg_V_I, SetInstrPrivlg_V_V,
 
-
 		SetPrivlg_R, SetPrivlg_A, SetPrivlg_I, SetPrivlg_V,
 
 		GetInstrPrivlg_R_R, GetInstrPrivlg_R_A, GetInstrPrivlg_R_I, GetInstrPrivlg_R_V,
 		GetInstrPrivlg_A_R, GetInstrPrivlg_A_A, GetInstrPrivlg_A_I, GetInstrPrivlg_A_V,
 		GetInstrPrivlg_I_R, GetInstrPrivlg_I_A, GetInstrPrivlg_I_I, GetInstrPrivlg_I_V,
-
 
 		SetIntPrivlg_R_R, SetIntPrivlg_R_A, SetIntPrivlg_R_I, SetIntPrivlg_R_V,
 		SetIntPrivlg_A_R, SetIntPrivlg_A_A, SetIntPrivlg_A_I, SetIntPrivlg_A_V,
@@ -253,7 +328,6 @@ namespace sbl::vm {
 		GetIntPrivlg_R_R, GetIntPrivlg_R_A, GetIntPrivlg_R_I, GetIntPrivlg_R_V,
 		GetIntPrivlg_A_R, GetIntPrivlg_A_A, GetIntPrivlg_A_I, GetIntPrivlg_A_V,
 		GetIntPrivlg_I_R, GetIntPrivlg_I_A, GetIntPrivlg_I_I, GetIntPrivlg_I_V,
-
 
 		SetIntExecPrivlg_R_R, SetIntExecPrivlg_R_A, SetIntExecPrivlg_R_I, SetIntExecPrivlg_R_V,
 		SetIntExecPrivlg_A_R, SetIntExecPrivlg_A_A, SetIntExecPrivlg_A_I, SetIntExecPrivlg_A_V,
@@ -272,8 +346,7 @@ namespace sbl::vm {
 		GetExtPrivlg_R_R, GetExtPrivlg_R_A, GetExtPrivlg_R_I, GetExtPrivlg_R_V,
 		GetExtPrivlg_A_R, GetExtPrivlg_A_A, GetExtPrivlg_A_I, GetExtPrivlg_A_V,
 		GetExtPrivlg_I_R, GetExtPrivlg_I_A, GetExtPrivlg_I_I, GetExtPrivlg_I_V,
-
-
+        
 		PCall_R_R, PCall_R_A, PCall_R_I, PCall_R_V,
 		PCall_A_R, PCall_A_A, PCall_A_I, PCall_A_V,
 		PCall_I_R, PCall_I_A, PCall_I_I, PCall_I_V,
@@ -282,27 +355,27 @@ namespace sbl::vm {
 		RPCall_A_R, RPCall_A_A, RPCall_A_I, RPCall_A_V,
 		RPCall_I_R, RPCall_I_A, RPCall_I_I, RPCall_I_V,
 
-		PrintC_R, PrintC_A, PrintC_I, PrintC_V,
+		PNtvCall_R_R, PNtvCall_R_A, PNtvCall_R_I, PNtvCall_R_V,
+		PNtvCall_A_R, PNtvCall_A_A, PNtvCall_A_I, PNtvCall_A_V,
+		PNtvCall_I_R, PNtvCall_I_A, PNtvCall_I_I, PNtvCall_I_V,
+		PNtvCall_V_R, PNtvCall_V_A, PNtvCall_V_I, PNtvCall_V_V,
 
-
-		EnableExt_R, EnableExt_A, EnableExt_I, EnableExt_V,
-		DisableExt_R, DisableExt_A, DisableExt_I, DisableExt_V,
-
-		IsExtEnabled_R_R, IsExtEnabled_R_A, IsExtEnabled_R_I, IsExtEnabled_R_V,
-		IsExtEnabled_A_R, IsExtEnabled_A_A, IsExtEnabled_A_I, IsExtEnabled_A_V,
-		IsExtEnabled_I_R, IsExtEnabled_I_A, IsExtEnabled_I_I, IsExtEnabled_I_V,
-
-
-		//Extension: Floating point
-		FpMov_R_R, FpMov_R_V,
+		/*
+			End of Privilege instructions
+			Beginning of Floating point instructions
+		*/
+		FpMov_R_R = 128 * 9, FpMov_R_V,
 
 		FpAdd_R_R, FpAdd_R_V,
 		FpSub_R_R, FpSub_R_V,
 		FpMul_R_R, FpMul_R_V,
 		FpDiv_R_R, FpDiv_R_V,
 
-		FpSign_R_R, FpSign_R_V,
+		FpSign_R, FpSign_V,
+
 		FpRound_R,
+		FpFloor_R,
+		FpCeil_R,
 
 		FpTest_R_R, FpTest_R_V,
 		FpTest_V_R, FpTest_V_V,
@@ -314,30 +387,50 @@ namespace sbl::vm {
 
 		FpPi_R,
 		FpE_R,
-		FpLn2_R,
-		FpLn10_R,
-		FpLog10_R,
+		FpCstLn2_R,
+		FpCstLn10_R,
+		FpCstLog10_R,
+
+		FpSin_R_R, FpSin_R_V,
+		FpCos_R_R, FpCos_R_V,
+		FpTan_R_R, FpTan_R_V,
+
+		FpLn_R_R, FpLn_R_V,
+		FpLog2_R_R, FpLog2_R_V,
+		FpLog10_R_R, FpLog10_R_V,
+
+		FpRoot_R,
+		FpCsqrt_R,
+
+		FpSq_R,
+		FpPow_R_R, FpPow_R_V,
+
+		FpExp_R,
+
+		FpRoot_R_R, FpRoot_R_V,
 
 		FpPrint_R, FpPrint_V,
-		//End extension: Floating point
 
-		//This variable is important, it marks the total count of instructions
-		//It will stop working when we introduce 2byte instructions(>=192 on first byte)
-		TotalCount,
+		MvSignFlag_R, MvSignFlag_A, MvSignFlag_I,
+		MvInfFlag_R, MvInfFlag_A, MvInfFlag_I,
+		MvNanFlag_R, MvNanFlag_A, MvNanFlag_I,
+		
+		/*
+			End of Floating point instructions
+			Not valid instructions, only tags remaining:
+		*/
 
+		TotalCount = 128 * 10,
 		Invalid,
+
+		NativeToCodeCall,
 	};
 
-	bool operator>=(uint32_t v, Mnemonic m) {
+	inline bool operator>=(uint32_t v, Mnemonic m) {
 		return v >= static_cast<uint32_t>(m);
 	}
 
-	class Instruction {
-		static Instruction& _constructInvalid() {
-			static Instruction _invalid = Instruction{ Mnemonic::Invalid, {}, {} };
-			return _invalid;
-		}
-	public:
+	struct Instruction {
 		Mnemonic mnemonic;
 		uint32_t arg1;
 		uint32_t arg2;
@@ -354,7 +447,16 @@ namespace sbl::vm {
 		static Instruction* fromStream(T& source, uint32_t at) {
 			return reinterpret_cast<Instruction*>(&source[0] + at);
 		}
+
+
+		static Instruction* fromAddress(uint32_t* addr) {
+			return reinterpret_cast<Instruction*>(addr);
+		}
+
+		static Instruction* fromAddress(uint32_t* addr, uint32_t offset) {
+			return reinterpret_cast<Instruction*>(addr + offset);
+		}
 	};
 }
 
-#endif //HEADER_INSTRUCTION_H_
+#endif //COMMON_INSTRUCTION_HEADER_H_

@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef FIXED_VECTOR_H_
-#define FIXED_VECTOR_H_
+#ifndef COMMON_FIXED_VECTOR_HEADER_H_
+#define COMMON_FIXED_VECTOR_HEADER_H_
 
 #include <memory>
 #include <array>
@@ -19,7 +19,7 @@ namespace sbl::cmn {
 		
 		FixedVector(const FixedVector& v) {
 			arrPtr = std::make_unique<std::array<T, Size>>();
-			for (int i = 0; i < v.size(); ++i) {
+			for (size_t i = 0; i < v.size(); ++i) {
 				(*arrPtr)[i] = v[i];
 			}
 			return *this;
@@ -27,7 +27,7 @@ namespace sbl::cmn {
 
 		FixedVector& operator=(const FixedVector& v) {
 			arrPtr = std::make_unique<std::array<T, Size>>();
-			for (int i = 0; i < v.size(); ++i) {
+			for (size_t i = 0; i < v.size(); ++i) {
 				(*arrPtr)[i] = v[i];
 			}
 			return *this;
@@ -104,4 +104,4 @@ namespace sbl::cmn {
 	};
 }
 
-#endif	//FIXED_VECTOR_H_
+#endif	//COMMON_FIXED_VECTOR_HEADER_H_

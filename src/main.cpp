@@ -5,6 +5,7 @@
 #include <functional>
 #include <numeric>
 #include <iomanip>
+#include <filesystem>
 
 #include <intrin.h>
 
@@ -18,25 +19,32 @@ void native_test(sbl::vm::State& state) {
 	//if (!nativeCallCount)
 	//	std::cout << "Privilege: " << state.currentPrivilege() << "\n";
 
+	std::cout << "Current privilege: " << state.currentPrivilege() << "\n";
 	++nativeCallCount;
 }
 
 constexpr auto qq() {
 	using namespace sbl::vm::literals;
 
-	char c[] = {
-		's', 'b', 'l', 'x',
-		0, 0, 0, 0x80_c,
-		0, 0x80_c, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
-		0, 0, 0, 0,
+	uint32_t c[] = {
+		0,
+		'sblx',
+		0x80,
+		0x800000,
+		0x1000,
+		0x00, 
+		0x00,
+		0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
 	};
 
 	sbl::vm::CompiledHeader header{};
-	header.fromString(std::string_view{ c, 32 });
+	//header.fromStream(c, 16 * 1024 * 1024);
 
 	return header;
 }
@@ -56,11 +64,366 @@ constexpr auto qqww = qqw();
 
 #include "common/FixedVector.hpp"
 
+#include <random>
+
+int distance(int x1, int y1, int x2, int y2) {
+	int xDiff = x2 - x1;
+	int yDiff = y2 - y1;
+	return xDiff * xDiff + yDiff * yDiff;
+}
+
+#include <ctime>
+#include <cmath>
+
+void nearest() {
+	struct Position {
+		int x, y;
+		bool operator==(const Position& p) {
+			return x == p.x && y == p.y;
+		}
+	};
+
+	std::srand(std::time(NULL));
+
+	std::vector<Position> positions;
+	std::mt19937 mt{ std::random_device{}() };
+	std::uniform_int_distribution dist(-10000, 10000);
+
+	/*
+	positions.push_back({ 3, 2 });
+	positions.push_back({ 0, 0 });
+	positions.push_back({ 3, 1 });
+	positions.push_back({ 4, 3 });
+	positions.push_back({ 3, 3 });
+	positions.push_back({ 2, 3 });
+	//*/
+	
+	namespace ch = std::chrono;
+	auto start = ch::high_resolution_clock::now().time_since_epoch();
+
+	positions.reserve(1000000);
+	
+	///*
+	for (int i = 0; i < 1000000; ++i) {
+		positions.push_back({ dist(mt), dist(mt) });
+		//positions.push_back({ (rand() % 20000) - 10000, (rand() % 20000) - 10000 });
+	}
+	//*/
+
+	start = ch::high_resolution_clock::now().time_since_epoch() - start;
+	std::cout << "Filling took " << ch::duration_cast<ch::microseconds>(start).count() / 1000.f << " ms.\n";
+
+	//auto position = Position{ (rand() % 20000) - 10000, (rand() % 20000) - 10000 };
+	auto position = Position{ dist(mt), dist(mt) };
+	//position = { 4, 0 };
+	auto nearestIdx = 0;
+	auto nearestDistSq = distance(position.x, position.y, positions[0].x, positions[0].y);
+
+	start = ch::high_resolution_clock::now().time_since_epoch();
+
+	for (size_t i = 1; i < positions.size(); ++i) {
+		auto dist = distance(position.x, position.y, positions[i].x, positions[i].y);
+		if (dist < nearestDistSq) {
+			nearestDistSq = dist;
+			nearestIdx = i;
+		}
+	}
+
+	start = ch::high_resolution_clock::now().time_since_epoch() - start;
+
+	std::cout << "Searching nearest for [" << position.x << ", " << position.y << "]\n";
+	std::cout << "Nearest is [" << positions[nearestIdx].x << ", "  << positions[nearestIdx].y << "]"
+		<< " at index " << nearestIdx << " with distance squared: " << nearestDistSq << "\n";
+	std::cout << "Search took " << ch::duration_cast<ch::microseconds>(start).count() / 1000.f << " ms.\n";
+}
+
+auto beautify = [](const std::string& s) {
+	std::string r;
+	r.reserve(s.size() + s.size() / 3);
+
+	auto over = s.size() % 3;
+	auto ctr = 0;
+
+	for (; over > 0; --over) {
+		r += s[ctr++];
+	}
+
+	if (ctr)
+		r += ',';
+
+	for (size_t i = ctr; i < s.size(); i += 3) {
+		r += s[i];
+		r += s[i + 1];
+		r += s[i + 2];
+		r += ',';
+	}
+
+	if (r.back() == ',')
+		r.pop_back();
+
+	return r;
+};
+
+std::vector<uint32_t> getGenerated(uint32_t numberElems) {
+	std::vector<uint32_t> positions;
+	std::mt19937 mt{ std::random_device{}() };
+	std::uniform_int_distribution dist(10, 20000);
+
+	positions.reserve(numberElems * 2 + 6);
+
+	for (int i = 0; i < numberElems * 2; ++i) {
+		positions.push_back(dist(mt));
+	}
+
+	positions.resize(4096 * ((positions.size() + 4095) / 4096));
+
+	positions.push_back(static_cast<uint32_t>(sbl::vm::Mnemonic::Mov_R_V));
+	positions.push_back(20);
+	positions.push_back(dist(mt));
+
+	positions.push_back(static_cast<uint32_t>(sbl::vm::Mnemonic::Mov_R_V));
+	positions.push_back(21);
+	positions.push_back(dist(mt));
+
+	return positions;
+}
+
+void computeCpp(const std::vector<uint32_t>& v, uint32_t generated) {
+	auto py = v.back();
+	auto px = v[v.size() - 4];
+
+	uint32_t dist = -1;
+	auto distance = [](uint32_t x, uint32_t y, uint32_t ux, uint32_t uy) {
+		auto xD = x - ux;
+		auto yD = y - uy;
+		return xD * xD + yD * yD;
+	};
+
+	for (int i = 0; i < std::min((uint32_t)v.size(), 2 * generated); i += 2) {
+		auto d = distance(px, py, v[i], v[i + 1]);
+		if (d < dist) {
+			dist = d;
+		}
+	}
+
+	std::cout << "Smallest dist is: " << dist << "\n\n";
+}
+
+#include <fstream>
+
 int main() {
 	static auto cast = [](auto m) constexpr { return static_cast<uint32_t>(m); };
+
+	namespace fs = std::filesystem;
+
 	using namespace sbl::vm;
 
+	std::cout << sizeof(VM) << "\n";
+
+	/*std::vector<uint32_t> program = {
+		//SBL header
+		0,
+		('sblx'),
+		0,
+		(2048),
+		0,
+		0,
+		(4096),
+		0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0,
+
+		//Program image
+
+		cast(Mnemonic::Mov_R_V), 0, 10,
+		cast(Mnemonic::Mul_R_R), 0, 0,
+		cast(Mnemonic::Print_R), 0, 0,
+		//cast(Mnemonic::Mov_R_V), 65, 0,
+
+		cast(Mnemonic::Mov_R_V), 10, 2200000,
+		cast(Mnemonic::PNtvCall_V_V), 0, 10,
+
+		cast(Mnemonic::Loop), 0, 0,
+		//cast(Mnemonic::RCall_A), 3 * 2, 0,
+		cast(Mnemonic::RCall_A), 3 * 6, 0,
+		//cast(Mnemonic::NtvCall_V), 0, 0,
+		cast(Mnemonic::Endloop), 0, 0,
+
+		cast(Mnemonic::FpPrint_R), 0, 0,
+		cast(Mnemonic::PrintC_V), '\n', 0,
+		cast(Mnemonic::Print_R), 16, 0,
+		cast(Mnemonic::PrintC_V), '\n', 0,
+		cast(Mnemonic::End), 0, 0,
+
+		//cast(Mnemonic::PNtvCall_V_V), 0, 10,
+		//cast(Mnemonic::Ret), 0, 0,
+		cast(Mnemonic::FpPi_R), 0, 0,
+		cast(Mnemonic::FpE_R), 1, 0,
+		cast(Mnemonic::FpMul_R_R), 0, 1,
+		cast(Mnemonic::RCall_A), 3 * 1, 0,
+		cast(Mnemonic::Ret), 0, 0,
+
+		cast(Mnemonic::Add_R_V), 16, 104123,
+		cast(Mnemonic::Xor_R_V), 16, 55472,
+		cast(Mnemonic::Ret), 0, 0,
+
+		cast(Mnemonic::RRegInt_V_A), cast(InterruptType::InstrCount), 9,
+		cast(Mnemonic::ICountInt_V), 100000000, 0,
+
+		//cast(Mnemonic::Nop), 0, 0,
+		cast(Mnemonic::Mov_R_V), 11, 0,
+		cast(Mnemonic::RJmp_A), cast(-3), 0,
+
+		cast(Mnemonic::End), 0, 0,
+	};
+	*/
+	
 	///*
+	constexpr uint32_t ToGenerate = 1000000;
+	std::vector<uint32_t> programData = getGenerated(ToGenerate);
+	computeCpp(programData, ToGenerate);
+	std::cout << "-----------------\n";
+	std::array<uint32_t, 64> header;
+	header.fill(0);
+	header[0] = 0;
+	header[1] = 'sblx';
+	header[2] = 0;	//Start addr, undecided
+	header[3] = 4096;
+	header[4] = 0;
+	header[5] = (programData.size() - 6);
+	header[6] = 4096;
+
+	std::vector<uint32_t> program = {
+		cast(Mnemonic::Mov_R_V), 16, 0,
+		cast(Mnemonic::Mov_R_V), 22, cast(-1),
+		cast(Mnemonic::Mov_R_V), 23, 0,
+
+		cast(Mnemonic::Mov_R_V), 10, ToGenerate,
+		cast(Mnemonic::Loop), 0, 0,
+
+		cast(Mnemonic::Mov_R_I), 0, 16,
+		cast(Mnemonic::Inc_R), 16, 0,
+		cast(Mnemonic::Mov_R_I), 1, 16,
+		cast(Mnemonic::Inc_R), 16, 0,
+
+		cast(Mnemonic::RCall_A), 3 * 11, 0,
+		cast(Mnemonic::Test_R_R), 0, 22,
+		cast(Mnemonic::RJb_A), 6, 0,
+
+		cast(Mnemonic::Mov_R_R), 22, 0,
+		cast(Mnemonic::Mov_R_R), 23, 16,
+
+		cast(Mnemonic::Endloop), 0, 0,
+		cast(Mnemonic::Div_R_V), 23, 2,
+		cast(Mnemonic::Dec_R), 23, 0,
+		cast(Mnemonic::Print_R), 22, 0,
+		cast(Mnemonic::PrintC_V), '\n', 0,
+		cast(Mnemonic::Print_R), 23, 0,
+		cast(Mnemonic::End), 0, 0,
+
+		cast(Mnemonic::Sub_R_R), 0, 20,
+		cast(Mnemonic::Sub_R_R), 1, 21,
+		cast(Mnemonic::Mul_R_R), 0, 0,
+		cast(Mnemonic::Mul_R_R), 1, 1,
+		cast(Mnemonic::Add_R_R), 0, 1,
+		cast(Mnemonic::Ret), 0, 0,
+	};
+
+	programData.insert(programData.begin(), header.begin(), header.end());
+	programData.insert(programData.end(), program.begin(), program.end());
+	programData.resize(4096 * ((programData.size() + 4095) / 4096));
+
+	std::cin.get();
+
+	while (1) {
+		sbl::vm::VM vm;
+		vm.run(programData);
+
+		std::cout << "\nExecution total time: " << ch::duration_cast<ch::microseconds>(vm.getEndingTime() - vm.getStartingTime()).count() / 1000.f << "ms.\n";
+		std::cout << "instructions executed: " << vm.totalExecuted() << "\n";
+	}
+
+	std::cin.get();
+	exit(0);
+	/*
+	program.resize(sizeof(CompiledHeader) / sizeof(uint32_t) + 4096 - (program.size() % 4096) + program.size());
+
+	while (1) {
+		VM vm;
+		vm.addNativeFunction("func", native_test, true);
+		vm.run(program);
+
+		auto execTimeNs = ch::duration_cast<ch::nanoseconds>(vm.getEndingTime() - vm.getStartingTime()).count();
+		auto execInstrCount = vm.totalExecuted();
+
+		if (vm.getError().code != sbl::vm::ErrorCode::None) {
+			std::cout << vm.formatErrorCode() << ", last instruction pointer: " << vm.getError().instrPtr << "\n";
+			std::cin.get();
+			continue;
+		}
+
+		std::cout << "Execution took " << execTimeNs / 1000000.f << "ms.\n";
+		continue;
+
+		double mhz = 1000. / (execTimeNs * 1. / execInstrCount);
+		int aboveDot = static_cast<int>(std::floor(mhz));
+		int belowDot = int((mhz - aboveDot) * 1000);
+		std::string belowStr = std::to_string(belowDot);
+		switch (belowStr.size()) {
+			case 0:
+				belowStr += "0";
+			case 1:
+				belowStr += "0";
+			case 2:
+				belowStr += "0";
+				break;
+		}
+
+		std::cout << "Executed " << beautify(std::to_string(execInstrCount))
+			<< " instructions. Average speed of 100 runs: " << aboveDot << '.' << belowStr << " Mhz\n";
+		std::cout << "On average it takes " << (4000.f / (aboveDot + belowDot / 1000.f)) << " cycles per operation.\n";
+
+		std::cout << "Native calls: " << beautify(std::to_string(nativeCallCount)) << "\n";
+		nativeCallCount = 0;
+	}
+
+	/*
+	nearest();
+
+	srand(time(nullptr));
+	auto rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	rnd = rand();
+	std::cout << std::hex << rnd << "\n";
+
+	DummyJump jmp;
+	jmp.exec(rnd);
+	rnd = rand();
+	jmp.exec(rnd);
+	rnd = rand();
+	jmp.exec(rnd);
+	rnd = rand();
+	jmp.exec(rnd);
+	rnd = rand();
+	jmp.exec(rnd);
+	*/
+
+	std::cin.get();
+	return 0;
+
+	/*
 	VM vm;
 
 	vm.addNativeFunction("func", native_test, false);
@@ -80,6 +443,37 @@ int main() {
 	std::cout << "VM is of size " << sizeof(VM) << " bytes\n";
 
 	std::vector<uint32_t> instrToInsert = {
+		/*
+		cast(Mnemonic::Push_V), 0, 0,
+		cast(Mnemonic::Push_V), 0, 0,
+		cast(Mnemonic::Push_V), cast(Mnemonic::IRet), 0,
+		cast(Mnemonic::Mov_R_R), 0, 63,
+		cast(Mnemonic::RHotpatch_A_I), 4 * 3, 0,
+		cast(Mnemonic::Add_R_V), 63, 3,
+		cast(Mnemonic::Mov_R_V), 0, 0,
+		cast(Mnemonic::RJmp_A), 2 * 3, 0,
+
+		cast(Mnemonic::SetPrivlg_V), 255, 0,
+		cast(Mnemonic::Nop), 0, 0,
+
+		cast(Mnemonic::RRegInt_V_A), 10, cast(-3 * 3),
+		cast(Mnemonic::SetPrivlg_V), 1, 0,
+		cast(Mnemonic::NtvCall_V), 0, 0,
+		cast(Mnemonic::Raise_V), 10, 0,
+		cast(Mnemonic::NtvCall_V), 0, 0,
+		cast(Mnemonic::End), 0, 0,
+		//*
+
+		cast(Mnemonic::RRegInt_V_A), cast(InterruptType::InstrCount), 9,
+		cast(Mnemonic::ICountInt_V), 500000000, 0,
+
+		cast(Mnemonic::Mov_R_V), 11, 0,
+		cast(Mnemonic::RJmp_A), cast(-6), 0,
+
+		cast(Mnemonic::End), 0, 0,
+
+		cast(Mnemonic::SetPrivlg_V), 255, 0,
+		cast(Mnemonic::Raise_V), cast(InterruptType::InstrCount), 0,
 		//cast(Mnemonic::Mov_R_V), 500, 1,
 		cast(Mnemonic::NtvCall_V), 0, 0,
 		//cast(Mnemonic::SetExtPrivlg_V_V), 0, 255,
@@ -168,7 +562,7 @@ int main() {
 		if (ctr)
 			r += ',';
 
-		for (int i = ctr; i < s.size(); i += 3) {
+		for (size_t i = ctr; i < s.size(); i += 3) {
 			r += s[i];
 			r += s[i + 1];
 			r += s[i + 2];
@@ -186,7 +580,7 @@ int main() {
 	while (true) {
 		std::vector<uint64_t> times;
 
-		for (int i = 0; i < 100; ++i) {
+		for (int i = 0; i < 1; ++i) {
 			if (!vm.run(1000, instructionStream)) {
 				std::cin.get();
 				exit(0);
@@ -224,6 +618,7 @@ int main() {
 
 		std::cout << "Executed " << beautify(std::to_string(execInstrCount))
 			<< " instructions. Average speed of 100 runs: " << aboveDot << '.' << belowStr << " Mhz\n";
+		std::cout << "On average it takes " << (4000.f / (aboveDot + belowDot / 1000.f)) << " cycles per operation.\n";
 		//break;
 	}
 
@@ -247,7 +642,7 @@ int main() {
 		cast(Mnemonic::Pop_A), 0, 0, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0, 0, 0, 0,
 		cast(Mnemonic::Pop_R), 0, 0, 0, 14, 0, 0, 0, 0, 0, 0,
 		cast(Mnemonic::End), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-	};*/
+	};//*
 
 	auto to32 = [](uint8_t u1, uint8_t u2, uint8_t u3, uint8_t u4) -> uint32_t {
 		return (u1 << 24) | (u2 << 16) | (u3 << 8) | u4;
@@ -279,7 +674,7 @@ int main() {
 	/*while (instrStream.size() < 20000) {
 		auto cpy = instrStream;
 		instrStream.insert(instrStream.end(), cpy.begin(), cpy.end());
-	}*/
+	}//*
 
 	Instruction m;
 	uint32_t instrOffset = 0;
